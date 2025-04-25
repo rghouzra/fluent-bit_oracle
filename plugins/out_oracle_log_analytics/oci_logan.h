@@ -150,11 +150,32 @@
 #define FLB_OCI_ERROR_CODE_TOO_MANY_REQUESTS               "TooManyRequests"
 #define FLB_OCI_ERROR_CODE_INTERNAL_SERVER_ERROR           "InternalServerError"
 
+/* for imds request*/
+#define ORACLE_IMDS_HOST "169.254.169.254"
+#define ORACLE_IMDS_BASE_URL "/opc/v2"
+#define ORACLE_IMDS_REGION_PATH "/instance/region"
+#define ORACLE_IMDS_LEAF_CERT_PATH "/identity/cert.pem"
+#define ORACLE_IMDS_LEAF_KEY_PATH "/identity/key.pem"
+#define ORACLE_IMDS_INTERMEDIATE_CERT_PATH "/identity/intermediate.pem"
+#define ORACLE_AUTH_HEADER "Authorization: Bearer Oracle"
+#define ORACLE_IMDS_TOKEN_PATH "/opc/v2/instancePrincipal/token"
+
+
 #include <fluent-bit/flb_upstream.h>
 #include <fluent-bit/flb_sds.h>
 #include <fluent-bit/flb_record_accessor.h>
 #include <fluent-bit/flb_hash_table.h>
 #include <monkey/mk_core/mk_list.h>
+#include "cJSON.h"
+#include <openssl/evp.h>
+#include <openssl/pem.h>
+#include <openssl/bio.h>
+#include <openssl/buffer.h>
+#include <openssl/err.h>
+#include <openssl/x509v3.h>
+#include <openssl/x509.h>
+#include <openssl/rsa.h>
+#include <openssl/pem.h>
 
 struct metadata_obj {
     flb_sds_t key;
@@ -168,6 +189,22 @@ struct flb_oci_error_response
   flb_sds_t code;
   flb_sds_t message;
 };
+
+struct flb_oracle_imds{
+  flb_sds_t region;
+  flb_sds_t leaf_cert;
+  flb_sds_t leaf_key;
+  flb_sds_t intermediate_cert;
+  flb_sds_t tenancy_ocid;
+  flb_sds_t federation_endpoint;
+  flb_sds_t fingerprint;
+  flb_sds_t compartment_ocid;
+  flb_sds_t session_pubkey;
+  flb_sds_t session_privkey;
+  struct flb_upstream *upstream;
+  struct flb_output_instance *ins;
+};
+
 
 struct flb_oci_logan {
     flb_sds_t namespace;
@@ -211,5 +248,10 @@ struct flb_oci_logan {
 
     struct flb_output_instance *ins;
 
+    // instance prinicip auth
+    struct flb_oracle_imds imds;
+    EVP_PKEY *session_key_pair;
+
+    char *auth_mode;
 };
 #endif

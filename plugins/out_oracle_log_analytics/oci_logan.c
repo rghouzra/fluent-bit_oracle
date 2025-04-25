@@ -1218,6 +1218,11 @@ static int cb_oci_logan_exit(void *data, struct flb_config *config)
 /* Configuration properties map */
 static struct flb_config_map config_map[] = {
     {
+        FLB_CONFIG_MAP_STR, "auth_mode", "config_file",
+        0, FLB_TRUE, offsetof(struct flb_oci_logan, auth_mode),
+        "Authentication mode : config_file as default or instance_principal"
+    },
+    {
         FLB_CONFIG_MAP_STR, "config_file_location", "",
         0, FLB_TRUE, offsetof(struct flb_oci_logan, config_file_location),
         "Location of the oci config file for user api key signing"

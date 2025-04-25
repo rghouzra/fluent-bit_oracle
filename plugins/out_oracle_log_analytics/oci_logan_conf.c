@@ -262,6 +262,462 @@ static int log_event_metadata_create(struct flb_oci_logan *ctx)
 
     return 0;
 }
+
+static flb_sds_t make_imds_request(struct flb_oci_logan *ctx, struct flb_connection *u_conn, const char *path)
+{
+    struct flb_http_client *client;
+    flb_sds_t response = NULL;
+    size_t b_sent;
+    int ret;
+
+    flb_plg_debug(ctx->ins, "path->%s", path);
+    client = flb_http_client(u_conn, FLB_HTTP_GET, path, NULL, 0,
+                             ORACLE_IMDS_HOST, 80, NULL, 0);
+    if (!client) {
+        return NULL;
+    }
+
+    flb_http_add_header(client, "Authorization", 13, "Bearer Oracle", 13);
+    ret = flb_http_do(client, &b_sent);
+    if (ret != 0 || client->resp.status != 200) {
+        flb_http_client_destroy(client);
+        return NULL;
+    }
+
+    response = flb_sds_create_len(client->resp.data, client->resp.data_len);
+    flb_http_client_destroy(client);
+    return response;
+}
+
+char *extract_region(const char *response) {
+    const char *body_start = strstr(response, "\r\n\r\n");
+    if (!body_start) {
+        return NULL;
+    }
+
+    body_start += 4;
+
+    while (*body_start == '\n' || *body_start == '\r' || *body_start == ' ') {
+        body_start++;
+    }
+
+    size_t len = strlen(body_start);
+    while (len > 0 && (body_start[len - 1] == '\n' || body_start[len - 1] == '\r' || body_start[len - 1] == ' ')) {
+        len--;
+    }
+
+    char *region = malloc(len + 1);
+    if (!region) {
+        return NULL;
+    }
+
+    strncpy(region, body_start, len);
+    region[len] = '\0';
+    // still have to convert it to long name
+    return region;
+}
+
+char *extract_pem_content(const char *response, const char *begin_marker, const char *end_marker)
+{
+    const char *start = strstr(response, begin_marker);
+    if (!start) {
+        return NULL;
+    }
+
+    const char *end = strstr(start, end_marker);
+    if (!end) {
+        return NULL;
+    }
+
+    end += strlen(end_marker);
+
+    size_t pem_length = end - start;
+    char *pem_content = malloc(pem_length + 1);
+    if (!pem_content) {
+        return NULL;
+    }
+
+    strncpy(pem_content, start, pem_length);
+    pem_content[pem_length] = '\0';
+
+    return pem_content;
+}
+
+flb_sds_t calculate_certificate_fingerprint(struct flb_oci_logan *ctx, const char *cert_pem)
+{
+    unsigned char sha1_hash[SHA_DIGEST_LENGTH];
+    X509 *cert = NULL;
+    BIO *bio = NULL;
+    flb_sds_t fingerprint = NULL;
+    
+    bio = BIO_new_mem_buf(cert_pem, -1);
+    if (!bio) {
+        return NULL;
+    }
+    
+    cert = PEM_read_bio_X509(bio, NULL, NULL, NULL);
+    if (!cert) {
+        BIO_free(bio);
+        return NULL;
+    }
+    
+    unsigned char *der_cert = NULL;
+    int der_len = i2d_X509(cert, &der_cert);
+    if (der_len <= 0 || !der_cert) {
+        X509_free(cert);
+        BIO_free(bio);
+        return NULL;
+    }
+    
+    SHA1(der_cert, der_len, sha1_hash);
+    OPENSSL_free(der_cert);
+    
+    char hex_fingerprint[SHA_DIGEST_LENGTH * 3 + 1];
+    char *p = hex_fingerprint;
+    for (int i = 0; i < SHA_DIGEST_LENGTH; i++) {
+        p += sprintf(p, "%02x:", sha1_hash[i]);
+    }
+
+    if (p > hex_fingerprint) {
+        *(p-1) = '\0';
+    }
+    
+    fingerprint = flb_sds_create(hex_fingerprint);
+
+    for (int i = 0; i< flb_sds_len(fingerprint);i++){
+        if (islower(fingerprint[i])) {
+            fingerprint[i] = toupper(fingerprint[i]);
+        }
+
+    }
+    X509_free(cert);
+    BIO_free(bio);
+    
+    return fingerprint;
+}
+
+bool extract_tenancy_compartment_ocid(struct flb_oci_logan *ctx, const char *cert_pem)
+{
+    BIO *bio = BIO_new_mem_buf(cert_pem, -1);
+    if (!bio) {
+        return 0;
+    }
+
+    X509 *cert = PEM_read_bio_X509(bio, NULL, NULL, NULL);
+    BIO_free(bio);
+    if (!cert) {
+        return 0;
+    }
+
+
+
+    flb_sds_t tenancy_ocid = NULL;
+    flb_sds_t compartment_ocid = NULL;
+    X509_NAME *subject = X509_get_subject_name(cert);
+    if (subject) {
+        char buf[1024];
+        X509_NAME_oneline(subject, buf, sizeof(buf));
+    }
+
+    int entry_count = X509_NAME_entry_count(subject);
+    for (int i = 0; i < entry_count; i++) {
+        X509_NAME_ENTRY *entry = X509_NAME_get_entry(subject, i);
+        ASN1_OBJECT *obj = X509_NAME_ENTRY_get_object(entry);
+        if (OBJ_obj2nid(obj) == NID_organizationalUnitName) {
+            ASN1_STRING *data = X509_NAME_ENTRY_get_data(entry);
+            const char *ou_str = (const char *)ASN1_STRING_get0_data(data);
+
+            if (strstr(ou_str, "opc-tenant:ocid1.tenancy") == ou_str) {
+                const char *ocid = strchr(ou_str, ':');
+                if (ocid && strlen(ocid + 1) > 0) {
+                    tenancy_ocid = flb_sds_create(ocid + 1);
+                    if(compartment_ocid)
+                        break;
+                }
+            }
+            else if(strstr(ou_str, "opc-compartment:ocid1.compartment") == ou_str){
+                const char *ocid = strchr(ou_str, ':');
+                if (ocid && strlen(ocid + 1) > 0) {
+                    compartment_ocid = flb_sds_create(ocid + 1);
+                    if(tenancy_ocid)
+                        break;
+                }
+            }
+        }
+    }
+    // BIO *out = BIO_new(BIO_s_mem());
+    // if (!out) {
+    //     flb_plg_error(ctx->ins, "failed to create BIO for printing certificate");
+    //     X509_free(cert);
+    //     return 0;
+    // }
+
+    // //just for debugging should be removed after
+    // X509_print(out, cert);
+
+    // char *cert_info = NULL;
+    // long len = BIO_get_mem_data(out, &cert_info);
+    // char *copy = malloc(len + 1);
+    // if (copy) {
+    //     memcpy(copy, cert_info, len);
+    //     copy[len] = '\0';
+    //     flb_plg_debug(ctx->ins, "full cert:\n%s", copy);
+    //     flb_plg_debug(ctx->ins, "eof cert");
+    //     free(copy);
+    // }
+
+    // BIO_free(out);
+
+    X509_free(cert);
+
+    if (!tenancy_ocid || !compartment_ocid) {
+        return 0;
+    }
+
+    ctx->imds.compartment_ocid = compartment_ocid;
+    ctx->imds.tenancy_ocid = tenancy_ocid;
+    return 1;
+}
+
+int get_keys_and_certs(struct flb_oci_logan *ctx, struct flb_config *config)
+{
+    ctx->u = flb_upstream_create(config, ORACLE_IMDS_HOST, 80, FLB_IO_TCP, NULL);
+    if (!ctx->u) {
+        flb_plg_error(ctx->ins, "failed to create upstream");
+        return 0;
+    }
+
+    struct flb_connection *u_conn = flb_upstream_conn_get(ctx->u);
+    if (!u_conn) {
+        flb_plg_error(ctx->ins, "failed to get upstream connection");
+        return 0;
+    }
+    flb_sds_t region_resp = make_imds_request(ctx, u_conn, ORACLE_IMDS_BASE_URL ORACLE_IMDS_REGION_PATH);
+    flb_sds_t cert_resp = make_imds_request(ctx, u_conn, ORACLE_IMDS_BASE_URL ORACLE_IMDS_LEAF_CERT_PATH);
+    flb_sds_t key_resp = make_imds_request(ctx, u_conn, ORACLE_IMDS_BASE_URL ORACLE_IMDS_LEAF_KEY_PATH);
+    flb_sds_t int_cert_resp = make_imds_request(ctx, u_conn, ORACLE_IMDS_BASE_URL ORACLE_IMDS_INTERMEDIATE_CERT_PATH);
+
+    if (!region_resp) {
+        flb_plg_error(ctx->ins, "failed to get region from IMDS");
+        goto error;
+    }
+    char *clean_region_resp = extract_region(region_resp);
+
+    if (!cert_resp) {
+        flb_plg_error(ctx->ins, "failed to get leaf cert from IMDS");
+        goto error;
+    }
+    // still to be freed
+    char *clean_cert_resp = extract_pem_content(cert_resp, "-----BEGIN CERTIFICATE-----", "-----END CERTIFICATE-----");
+    if (!key_resp) {
+        goto error;
+    }
+    char *clean_private_key = extract_pem_content(key_resp, "-----BEGIN PRIVATE KEY-----", "-----END PRIVATE KEY-----");
+
+    if (!int_cert_resp) {
+        goto error;    
+    }
+    char *clean_int_cert = extract_pem_content(int_cert_resp, "-----BEGIN CERTIFICATE-----", "-----END CERTIFICATE-----");
+    ctx->imds.region = clean_region_resp;
+    ctx->imds.region = "us-phoenix-1";
+    ctx->imds.leaf_cert = clean_cert_resp;
+    ctx->imds.intermediate_cert = int_cert_resp;
+    char *pem_start = strstr(key_resp, "-----BEGIN");
+    char *pem_end = strstr(key_resp, "-----END");
+    if (!pem_start || !pem_end) {
+        flb_plg_error(ctx->ins, "No valid PEM block found");
+        return -1;
+    }
+    size_t pem_len = (pem_end - pem_start) + strlen("-----END RSA PRIVATE KEY-----") + 1;
+    ctx->imds.leaf_key = flb_sds_create_len(pem_start, pem_len);
+
+    if (!extract_tenancy_compartment_ocid(ctx, clean_cert_resp)) {
+        goto error;
+    }
+    ctx->imds.fingerprint = calculate_certificate_fingerprint(ctx, clean_cert_resp);
+    if(!ctx->imds.fingerprint){
+        goto error;
+    }
+    ctx->imds.federation_endpoint = flb_sds_create_size(128);
+    // just temporary should be removed and replaced with something like mapping in python3 sdk
+    flb_sds_printf(&ctx->imds.federation_endpoint, "https://auth.%s.oraclecloud.com/v1/x509", 
+                  flb_sds_create("us-phoenix-1"));
+    flb_upstream_conn_release(u_conn);
+    flb_upstream_destroy(ctx->u);
+    ctx->u = NULL;
+    return 1;
+
+error:
+    if (region_resp) {
+        flb_sds_destroy(region_resp);
+    }
+    if (cert_resp) {
+        flb_sds_destroy(cert_resp);;
+    }
+    if (key_resp) {
+        flb_sds_destroy(key_resp);
+    }
+    if (int_cert_resp) {
+        flb_sds_destroy(int_cert_resp);
+    }
+    ctx->imds.intermediate_cert = NULL;
+    ctx->imds.leaf_cert = NULL;
+    ctx->imds.leaf_key = NULL;
+    ctx->imds.region = NULL;
+    flb_upstream_conn_release(u_conn);
+    flb_upstream_destroy(ctx->u);
+    ctx->u = NULL;
+    return 0;
+}
+
+static EVP_PKEY *generate_session_key_pair(struct flb_oci_logan *ctx)
+{
+    EVP_PKEY *pkey = EVP_PKEY_new();
+    BIGNUM *bn = BN_new();
+    RSA *rsa = RSA_new();
+    int rc;
+
+    BN_set_word(bn, RSA_F4);
+    rc = RSA_generate_key_ex(rsa, 2048, bn, NULL);
+    if (rc != 1) {
+        RSA_free(rsa);
+        BN_free(bn);
+        return NULL;
+    }
+
+    EVP_PKEY_assign_RSA(pkey, rsa);
+    BN_free(bn);
+    return pkey;
+}
+
+
+char *extract_public_key_pem(EVP_PKEY *pkey) {
+    BIO *bio = BIO_new(BIO_s_mem());
+    if (!bio) {
+        return NULL; 
+    }
+
+    
+    if (!PEM_write_bio_PUBKEY(bio, pkey)) {
+        BIO_free(bio);
+        return NULL; 
+    }
+
+    
+    char *pem_data = NULL;
+    long pem_length = BIO_get_mem_data(bio, &pem_data);
+
+    
+    char *public_key_pem = malloc(pem_length + 1);
+    if (!public_key_pem) {
+        BIO_free(bio);
+        return NULL; 
+    }
+
+    strncpy(public_key_pem, pem_data, pem_length);
+    public_key_pem[pem_length] = '\0'; 
+
+    BIO_free(bio);
+    return public_key_pem;
+}
+
+char *extract_private_key_pem(EVP_PKEY *pkey) {
+    BIO *bio = BIO_new(BIO_s_mem());
+    if (!bio) {
+        return NULL; 
+    }
+    
+    if (!PEM_write_bio_PrivateKey(bio, pkey, NULL, NULL, NULL, NULL, NULL)) {
+        BIO_free(bio);
+        return NULL; 
+    }
+
+    
+    char *pem_data = NULL;
+    long pem_length = BIO_get_mem_data(bio, &pem_data);
+
+    
+    char *private_key_pem = malloc(pem_length + 1);
+    if (!private_key_pem) {
+        BIO_free(bio);
+        return NULL; 
+    }
+
+    strncpy(private_key_pem, pem_data, pem_length);
+    private_key_pem[pem_length] = '\0'; 
+
+    BIO_free(bio);
+    return private_key_pem;
+}
+
+static flb_sds_t sanitize_certificate(const char *cert_str) {
+    if (!cert_str) return NULL;
+    
+    const char *start = strstr(cert_str, "-----BEGIN");
+    if (!start) return NULL;
+    
+    start = strchr(start, '\n');
+    if (!start) return NULL;
+    start++;
+    
+    const char *end = strstr(cert_str, "-----END");
+    if (!end || end <= start) return NULL;
+    
+    flb_sds_t clean = flb_sds_create_len(start, end - start);
+    if (!clean) return NULL;
+    
+    size_t j = 0;
+    for (size_t i = 0; i < flb_sds_len(clean); i++) {
+        if (!isspace(clean[i])) {
+            clean[j++] = clean[i];
+        }
+    }
+    clean[j] = '\0';
+    flb_sds_len_set(clean, j);
+    
+    return clean;
+}
+
+static flb_sds_t create_federation_payload(struct flb_oci_logan *ctx)
+{
+    flb_sds_t payload = NULL;
+    flb_sds_t leaf_cert = sanitize_certificate(ctx->imds.leaf_cert);
+    flb_sds_t session_pubkey = sanitize_certificate(ctx->imds.session_pubkey);
+    flb_sds_t intermediate_certs = sanitize_certificate(ctx->imds.intermediate_cert);
+
+    if (ctx->imds.intermediate_cert) {
+        intermediate_certs = sanitize_certificate(ctx->imds.intermediate_cert);
+    }
+
+    payload = flb_sds_create_size(8192);
+    if (!payload) {
+        goto cleanup;
+    }
+
+    if (intermediate_certs && flb_sds_len(intermediate_certs) > 0) {
+        flb_sds_printf(&payload,
+            "{\"certificate\":\"%s\",\"publicKey\":\"%s\","
+            "\"intermediateCertificates\":[\"%s\"]}",
+            leaf_cert, session_pubkey, intermediate_certs);
+    }
+    else {
+        flb_sds_printf(&payload,
+            "{\"certificate\":\"%s\",\"publicKey\":\"%s\","
+            "\"intermediateCertificates\":[]}",
+            leaf_cert, session_pubkey);
+    }
+
+
+cleanup:
+    // flb_sds_destroy(leaf_cert);
+    // flb_sds_destroy(session_pubkey);
+    // flb_sds_destroy(intermediate_certs);
+    return payload;
+}
+
+
+
+
 struct flb_oci_logan *flb_oci_logan_conf_create(struct flb_output_instance *ins,
                                                 struct flb_config *config) {
     struct flb_oci_logan *ctx;
@@ -284,12 +740,66 @@ struct flb_oci_logan *flb_oci_logan_conf_create(struct flb_output_instance *ins,
     mk_list_init(&ctx->log_event_metadata_fields);
 
     ctx->ins = ins;
-
+    
     ret = flb_output_config_map_set(ins, (void *) ctx);
     if (ret == -1) {
         flb_plg_error(ctx->ins, "configuration error");
         flb_oci_logan_conf_destroy(ctx);
         return NULL;
+    }
+
+    if(strcmp(ctx->auth_mode, "instance_principal") == 0){
+        flb_plg_info(ctx->ins, "Using instance principal authentication");
+        
+        if (get_keys_and_certs(ctx, config) != 1) {
+            flb_oci_logan_conf_destroy(ctx);
+            return NULL;
+        }
+        
+        ctx->session_key_pair = generate_session_key_pair(ctx);
+        if (!ctx->session_key_pair) {
+            flb_oci_logan_conf_destroy(ctx);
+            return NULL;
+        }
+        
+        ctx->imds.session_pubkey = extract_public_key_pem(ctx->session_key_pair);
+        ctx->imds.session_privkey = extract_private_key_pem(ctx->session_key_pair);
+        
+        if (!ctx->imds.session_pubkey || !ctx->imds.session_privkey) {
+            flb_oci_logan_conf_destroy(ctx);
+            return NULL;
+        }
+        
+        flb_sds_t json_payload = create_federation_payload(ctx);
+        if (!json_payload) {
+            flb_oci_logan_conf_destroy(ctx);
+            return NULL;
+        }
+        
+        flb_plg_debug(ctx->ins, "json_payload -> %s", json_payload);
+    } else {
+        if (!ctx->config_file_location) {
+            flb_plg_error(ctx->ins, "config file location i's required for config_file auth mode");
+            flb_oci_logan_conf_destroy(ctx);
+            return NULL;
+        }
+
+        ret = load_oci_credentials(ctx);
+        if(ret != 0) {
+            flb_errno();
+            flb_oci_logan_conf_destroy(ctx);
+            return NULL;
+        }
+        
+        if (create_pk_context(ctx->key_file, NULL, ctx) < 0) {
+            flb_plg_error(ctx->ins, "failed to create pk context");
+            flb_oci_logan_conf_destroy(ctx);
+            return NULL;
+        }
+
+        ctx->key_id = flb_sds_create_size(512);
+        flb_sds_snprintf(&ctx->key_id, flb_sds_alloc(ctx->key_id),
+                         "%s/%s/%s", ctx->tenancy, ctx->user, ctx->key_fingerprint);
     }
 
     if (ctx->oci_config_in_record == FLB_FALSE) {
@@ -320,19 +830,7 @@ struct flb_oci_logan *flb_oci_logan_conf_create(struct flb_output_instance *ins,
         }
     }
 
-    if (!ctx->config_file_location) {
-        flb_plg_error(ctx->ins, "config file location is required");
-        flb_oci_logan_conf_destroy(ctx);
-        return NULL;
-    }
-
-    ret = load_oci_credentials(ctx);
-    if(ret != 0) {
-        flb_errno();
-        flb_oci_logan_conf_destroy(ctx);
-        return NULL;
-    }
-
+    // Setup host and URI
     if (ins->host.name) {
         host = ins->host.name;
     }
@@ -358,29 +856,21 @@ struct flb_oci_logan *flb_oci_logan_conf_create(struct flb_output_instance *ins,
                        ctx->namespace);
     }
 
-
-
-    if (create_pk_context(ctx->key_file, NULL, ctx) < 0) {
-        flb_plg_error(ctx->ins, "failed to create pk context");
-        flb_oci_logan_conf_destroy(ctx);
-        return NULL;
-    }
-
-
-    ctx->key_id = flb_sds_create_size(512);
-    flb_sds_snprintf(&ctx->key_id, flb_sds_alloc(ctx->key_id),
-                     "%s/%s/%s", ctx->tenancy, ctx->user, ctx->key_fingerprint);
-
-
     /* Check if SSL/TLS is enabled */
-    io_flags = FLB_IO_TCP;
-    default_port = 80;
-
 #ifdef FLB_HAVE_TLS
     if (ins->use_tls == FLB_TRUE) {
         io_flags = FLB_IO_TLS;
         default_port = 443;
     }
+    else {
+        flb_plg_error(ctx->ins, "TLS must be enabled for OCI");
+        flb_oci_logan_conf_destroy(ctx);
+        return NULL;
+    }
+#else
+    flb_plg_error(ctx->ins, "TLS support required for OCI");
+    flb_oci_logan_conf_destroy(ctx);
+    return NULL;
 #endif
 
     if (ins->host.ipv6 == FLB_TRUE) {
@@ -388,12 +878,16 @@ struct flb_oci_logan *flb_oci_logan_conf_create(struct flb_output_instance *ins,
     }
 
     flb_output_net_default(host, default_port, ins);
-    flb_sds_destroy(host);
+    
+    if (!ins->host.name) {
+        flb_sds_destroy(host);
+    }
 
+    // Setup proxy if configured
     if (ctx->proxy) {
-        ret = flb_utils_url_split(tmp, &protocol, &p_host, &p_port, &p_uri);
+        ret = flb_utils_url_split(ctx->proxy, &protocol, &p_host, &p_port, &p_uri);
         if (ret == -1) {
-            flb_plg_error(ctx->ins, "could not parse proxy parameter: '%s'", tmp);
+            flb_plg_error(ctx->ins, "could not parse proxy parameter: '%s'", ctx->proxy);
             flb_oci_logan_conf_destroy(ctx);
             return NULL;
         }
@@ -403,27 +897,25 @@ struct flb_oci_logan *flb_oci_logan_conf_create(struct flb_output_instance *ins,
         flb_free(protocol);
         flb_free(p_port);
         flb_free(p_uri);
-        flb_free(p_host);
     }
 
+    // Create upstream connection
     if (ctx->proxy) {
         upstream = flb_upstream_create(config, ctx->proxy_host, ctx->proxy_port,
                                        io_flags, ins->tls);
     }
     else {
-        /* Prepare an upstream handler */
         upstream = flb_upstream_create(config, ins->host.name, ins->host.port,
                                        io_flags, ins->tls);
     }
 
     if (!upstream) {
-        flb_plg_error(ctx->ins, "cannot create Upstream context");
+        flb_plg_error(ctx->ins, "cannot create upstream context");
         flb_oci_logan_conf_destroy(ctx);
         return NULL;
     }
     ctx->u = upstream;
 
-    /* Set instance flags into upstream */
     flb_output_upstream_set(ctx->u, ins);
 
     return ctx;
