@@ -165,6 +165,17 @@
 #include <fluent-bit/flb_sds.h>
 #include <fluent-bit/flb_record_accessor.h>
 #include <fluent-bit/flb_hash_table.h>
+#include <fluent-bit/flb_output_plugin.h>
+#include <fluent-bit/flb_upstream.h>
+#include <fluent-bit/flb_upstream_conn.h>
+#include <fluent-bit/flb_http_client.h>
+#include <fluent-bit/flb_log_event_decoder.h>
+#include <fluent-bit/flb_hash_table.h>
+#include <fluent-bit/flb_pack.h>
+#include <fluent-bit/flb_crypto.h>
+#include <fluent-bit/flb_base64.h>
+#include <fluent-bit/flb_hash.h>
+#include <fluent-bit/flb_sds.h>
 #include <monkey/mk_core/mk_list.h>
 #include "cJSON.h"
 #include <openssl/evp.h>
@@ -205,6 +216,11 @@ struct flb_oracle_imds{
   struct flb_output_instance *ins;
 };
 
+struct oci_security_token {
+    flb_sds_t token;
+    time_t expires_at; 
+    flb_sds_t session_privkey;
+};
 
 struct flb_oci_logan {
     flb_sds_t namespace;
@@ -245,13 +261,12 @@ struct flb_oci_logan {
     /* For OCI signing */
     flb_sds_t key_id; // tenancy/user/key_fingerprint
     flb_sds_t private_key;
-
     struct flb_output_instance *ins;
 
     // instance prinicip auth
     struct flb_oracle_imds imds;
     EVP_PKEY *session_key_pair;
-
+    struct oci_security_token security_token;
     char *auth_mode;
 };
 #endif
