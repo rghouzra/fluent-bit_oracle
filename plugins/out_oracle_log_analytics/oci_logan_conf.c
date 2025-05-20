@@ -715,6 +715,471 @@ cleanup:
     return payload;
 }
 
+static flb_sds_t sign_request_with_key(struct flb_oci_logan *ctx, 
+                                    const char *method, 
+                                    flb_sds_t url_path,
+                                    flb_sds_t payload,
+                                    flb_sds_t date,
+                                    const char *host)
+{
+    flb_sds_t auth_header = NULL;
+    flb_sds_t string_to_sign = NULL;
+    flb_sds_t lowercase_method = NULL;
+    unsigned char *signature = NULL;
+    unsigned char *b64_out = NULL;
+    size_t sig_len = 0;
+    BIO *bio = NULL;
+    EVP_PKEY *pkey = NULL;
+    EVP_MD_CTX *md_ctx = NULL;
+    
+    string_to_sign = flb_sds_create_size(1024);
+    if (!string_to_sign) {
+        return NULL;
+    }
+    
+    lowercase_method = flb_sds_create(method);
+    if (!lowercase_method) {
+        flb_sds_destroy(string_to_sign);
+        return NULL;
+    }
+    
+    for (int i = 0; i < flb_sds_len(lowercase_method); i++) {
+        lowercase_method[i] = tolower(method[i]);
+    }
+
+    flb_sds_printf(&string_to_sign, "date: %s\n", date);
+    flb_sds_printf(&string_to_sign, "(request-target): %s %s\n", 
+                 lowercase_method, url_path);
+    // flb_sds_printf(&string_to_sign, "host: %s\n", host);
+    flb_sds_printf(&string_to_sign, "content-length: %zu\n", (payload) ? strlen(payload) : 0); 
+    flb_sds_printf(&string_to_sign, "content-type: application/json\n");
+
+    unsigned char hash[SHA256_DIGEST_LENGTH];
+    char *b64_hash = NULL;
+    size_t b64_len = 0;
+
+    SHA256((unsigned char*)payload, (payload) ? flb_sds_len(payload) : 0, hash);
+
+    b64_len = 4 * ((SHA256_DIGEST_LENGTH + 2) / 3) + 1; 
+    b64_hash = flb_malloc(b64_len);
+    if (!b64_hash) {
+        goto cleanup;
+    }
+    if (flb_base64_encode(b64_hash, b64_len, &b64_len, hash, SHA256_DIGEST_LENGTH) != 0) {
+        flb_free(b64_hash);
+        goto cleanup;
+    }
+    b64_hash[b64_len] = '\0';
+
+    flb_sds_printf(&string_to_sign, "x-content-sha256: %s", b64_hash);
+
+    if (b64_hash) {
+        flb_free(b64_hash);
+    }
+    flb_plg_debug(ctx->ins, "string to sign: [%s]", string_to_sign);
+
+    bio = BIO_new_mem_buf((void*)ctx->imds.leaf_key, -1);
+    if (!bio) {
+        goto cleanup;
+    }
+    
+    pkey = PEM_read_bio_PrivateKey(bio, NULL, NULL, NULL);
+    if (!pkey) {
+        goto cleanup;
+    }
+    
+    md_ctx = EVP_MD_CTX_new();
+    if (!md_ctx) {
+        goto cleanup;
+    }
+    
+    if (EVP_DigestSignInit(md_ctx, NULL, EVP_sha256(), NULL, pkey) <= 0) {
+        goto cleanup;
+    }
+    
+    if (EVP_DigestSignUpdate(md_ctx, string_to_sign, flb_sds_len(string_to_sign)) <= 0) {
+        goto cleanup;
+    }
+    
+    if (EVP_DigestSignFinal(md_ctx, NULL, &sig_len) <= 0) {
+        goto cleanup;
+    }
+    
+    signature = flb_malloc(sig_len);
+    if (!signature) {
+        goto cleanup;
+    }
+    
+    if (EVP_DigestSignFinal(md_ctx, signature, &sig_len) <= 0) {
+        goto cleanup;
+    }
+
+    size_t b64_size = ((sig_len + 2) / 3) * 4 + 1;
+    size_t olen = 0;
+    b64_out = flb_malloc(b64_size);
+    
+    if (!b64_out) {
+        goto cleanup;
+    }
+    
+    if (flb_base64_encode(b64_out, b64_size, &olen, signature, sig_len) != 0) {
+        goto cleanup;
+    }
+    
+    b64_out[olen] = '\0';
+    
+    auth_header = flb_sds_create_size(2048);
+    if (!auth_header) {
+        goto cleanup;
+    }
+    
+     flb_sds_printf(&auth_header, 
+    "Signature version=\"1\",keyId=\"%s/fed-x509/%s\",algorithm=\"rsa-sha256\","
+    "signature=\"%s\",headers=\"date (request-target) content-length content-type x-content-sha256\"",
+    ctx->imds.tenancy_ocid, 
+    ctx->imds.fingerprint, 
+    b64_out);
+
+cleanup:
+    if (bio) {
+        BIO_free(bio);
+    }
+    if (pkey) {
+        EVP_PKEY_free(pkey);
+    }
+    if (md_ctx) {
+        EVP_MD_CTX_free(md_ctx);
+    }
+    if (signature) {
+        flb_free(signature);
+    }
+    if (b64_out) {
+        flb_free(b64_out);
+    }
+    if (string_to_sign) {
+        flb_sds_destroy(string_to_sign);
+    }
+    if (lowercase_method) {
+        flb_sds_destroy(lowercase_method);
+    }
+    flb_plg_debug(ctx->ins, "auth header: %s", auth_header);
+    
+    return auth_header;
+}
+
+static flb_sds_t clean_token_string(flb_sds_t input) {
+    if (!input) return NULL;
+    
+    size_t len = flb_sds_len(input);
+    size_t write_pos = 0;
+    
+    for (size_t read_pos = 0; read_pos < len; read_pos++) {
+        char c = input[read_pos];
+        if (c >= 32 && c <= 126) {
+            input[write_pos++] = c;
+        }
+    }
+    
+    input[write_pos] = '\0';
+    flb_sds_len_set(input, write_pos);
+    
+    return input;
+}
+
+
+static int parse_federation_response(flb_sds_t response,struct oci_security_token *token) {
+    cJSON *json = NULL;
+    cJSON *token_item = NULL;
+    int ret = -1;
+    
+    if (!response || !token) {
+        return -1;
+    }
+    
+    json = cJSON_Parse(response);
+    if (!json) {
+        return -1;
+    }
+    
+    token_item = cJSON_GetObjectItem(json, "token");
+    if (!token_item || !cJSON_IsString(token_item)) {
+        cJSON_Delete(json);
+        return -1;
+    }
+    
+    const char *token_str = cJSON_GetStringValue(token_item);
+    if (!token_str) {
+        cJSON_Delete(json);
+        return -1;
+    }
+    
+    flb_sds_t raw_token = flb_sds_create(token_str);
+    if (!raw_token) {
+        cJSON_Delete(json);
+        return -1;
+    }
+    
+    if (!clean_token_string(raw_token)) {
+        flb_sds_destroy(raw_token);
+        cJSON_Delete(json);
+        return -1;
+    }
+    
+    if (token) {
+        flb_sds_destroy(token->token);
+    }
+    token->token = raw_token;
+    
+    cJSON_Delete(json);
+    return 0;
+}
+
+static int decode_jwt_and_set_expires(struct flb_oci_logan *ctx) {
+    if (!ctx || !ctx->security_token.token) {
+        flb_plg_error(ctx->ins, "Invalid context or token");
+        return -1;
+    }
+
+    char *token = ctx->security_token.token;
+    char *dot1 = strchr(token, '.');
+    char *dot2 = dot1 ? strchr(dot1 + 1, '.') : NULL;
+    
+    if (!dot1 || !dot2) {
+        flb_plg_error(ctx->ins, "Invalid JWT format");
+        return -1;
+    }
+    
+    size_t payload_b64url_len = dot2 - (dot1 + 1);
+    char *payload_b64url = flb_malloc(payload_b64url_len + 1);
+    if (!payload_b64url) {
+        return -1;
+    }
+    
+    memcpy(payload_b64url, dot1 + 1, payload_b64url_len);
+    payload_b64url[payload_b64url_len] = '\0';
+    
+    for (int i = 0; i < payload_b64url_len; i++) {
+        if (payload_b64url[i] == '-') payload_b64url[i] = '+';
+        else if (payload_b64url[i] == '_') payload_b64url[i] = '/';
+    }
+    
+    int padding = (4 - (payload_b64url_len % 4)) % 4;
+    size_t b64_len = payload_b64url_len + padding;
+    char *payload_b64 = flb_malloc(b64_len + 1);
+    if (!payload_b64) {
+        flb_free(payload_b64url);
+        return -1;
+    }
+    
+    strncpy(payload_b64, payload_b64url, payload_b64url_len);
+    memset(payload_b64 + payload_b64url_len, '=', padding);
+    payload_b64[b64_len] = '\0';
+    
+    size_t decoded_len = (b64_len * 3) / 4 + 1;
+    char *decoded_payload = flb_malloc(decoded_len);
+    if (!decoded_payload) {
+        flb_free(payload_b64url);
+        flb_free(payload_b64);
+        return -1;
+    }
+    
+    size_t olen = 0;
+    int ret = flb_base64_decode((unsigned char *)decoded_payload, decoded_len, 
+                               &decoded_len, (unsigned char *)payload_b64, b64_len);
+    if (ret != 0) {
+        flb_plg_error(ctx->ins, "Base64 decode failed");
+        flb_free(payload_b64url);
+        flb_free(payload_b64);
+        flb_free(decoded_payload);
+        return -1;
+    }
+    
+    decoded_payload[decoded_len] = '\0';
+    flb_plg_debug(ctx->ins, "decoded payload -> [%s]", decoded_payload);
+    // there was a hbo
+    cJSON *json = cJSON_Parse(decoded_payload);
+    if (json == NULL) {
+        const char *error_ptr = cJSON_GetErrorPtr();
+        if (error_ptr != NULL) {
+            flb_plg_error(ctx->ins, "JSON parse error before: %s", error_ptr);
+        } else {
+            flb_plg_error(ctx->ins, "JSON parse error");
+        }
+        flb_free(payload_b64url);
+        flb_free(payload_b64);
+        flb_free(decoded_payload);
+        return -1;
+    }
+    
+    cJSON *exp_item = cJSON_GetObjectItem(json, "exp");
+    if (!exp_item || !cJSON_IsNumber(exp_item)) {
+        flb_plg_error(ctx->ins, "Missing or invalid 'exp' in JWT");
+        cJSON_Delete(json);
+        flb_free(payload_b64url);
+        flb_free(payload_b64);
+        flb_free(decoded_payload);
+        return -1;
+    }
+    
+    time_t exp_value = (time_t)exp_item->valuedouble;
+    flb_plg_debug(ctx->ins, "Found exp value: %ld", (long)exp_value);
+    char *json_str = cJSON_Print(json);
+    if (json_str) {
+        flb_free(json_str);
+    }
+    
+    ctx->security_token.expires_at = exp_value;
+    
+    cJSON_Delete(json);
+    flb_free(payload_b64url);
+    flb_free(payload_b64);
+    flb_free(decoded_payload);
+    
+    return 0;
+}
+
+static flb_sds_t sign_and_send_federation_request(struct flb_oci_logan *ctx, flb_sds_t payload)
+{
+    struct flb_upstream *upstream;
+    struct flb_http_client *client;
+    size_t b_sent;
+    int ret;
+    struct flb_connection *u_conn;
+    flb_sds_t resp = NULL;
+    char *host = NULL;
+    int port = 443;
+    flb_sds_t url_path = flb_sds_create("/v1/x509");
+    flb_sds_t auth_header = NULL;
+    flb_sds_t date_header = NULL;
+    host = flb_strdup("auth.us-phoenix-1.oraclecloud.com");
+    time_t now;
+    struct tm *tm_info;
+    char date_buf[128];
+
+    time(&now);
+    tm_info = gmtime(&now);
+    strftime(date_buf, sizeof(date_buf), "%a, %d %b %Y %H:%M:%S GMT", tm_info);
+    date_header = flb_sds_create(date_buf);
+    
+    if (!date_header) {
+        flb_free(host);
+        flb_sds_destroy(url_path);
+        return NULL;
+    }
+    
+    upstream = flb_upstream_create(ctx->ins->config, host, port, 
+                                  FLB_IO_TLS, ctx->ins->tls);
+    if (!upstream) {
+        flb_free(host);
+        flb_sds_destroy(url_path);
+        return NULL;
+    }
+    
+    u_conn = flb_upstream_conn_get(upstream);
+    if (!u_conn) {
+        flb_upstream_destroy(upstream);
+        flb_free(host);
+        flb_sds_destroy(url_path);
+        return NULL;
+    }
+    client = flb_http_client(u_conn, FLB_HTTP_POST, url_path, 
+                           payload, strlen(payload),
+                           host, port, NULL, 0);
+    
+    if (!client) {
+        flb_upstream_conn_release(u_conn);
+        flb_upstream_destroy(upstream);
+        flb_free(host);
+        flb_sds_destroy(url_path);
+        flb_sds_destroy(date_header);
+        return NULL;
+    }
+
+    char user_agent[256];
+     snprintf(user_agent, sizeof(user_agent), 
+            "fluent-bit-oci-plugin/%s", ctx->ins->p->name);
+    flb_http_add_header(client, "Date", 4, date_header, flb_sds_len(date_header));
+    flb_http_add_header(client, "Content-Type", 12, "application/json", 16);
+    flb_http_add_header(client, "Content-Length", 14, NULL, 0);
+    unsigned char hash[SHA256_DIGEST_LENGTH];
+    char *b64_hash = NULL;
+    size_t b64_len = 0;
+
+    SHA256((unsigned char*)payload, flb_sds_len(payload), hash);
+
+    b64_len = 4 * ((SHA256_DIGEST_LENGTH + 2) / 3) + 1;  
+    b64_hash = flb_malloc(b64_len);
+    if (!b64_hash) {
+        goto cleanup;
+    }
+    if (flb_base64_encode(b64_hash, b64_len, &b64_len, hash, SHA256_DIGEST_LENGTH) != 0) {
+        flb_free(b64_hash);
+        goto cleanup;
+    }
+    b64_hash[b64_len] = '\0';
+    flb_http_add_header(client, "x-content-sha256", 16, b64_hash, b64_len);
+    flb_http_add_header(client, "User-Agent", 10, user_agent, strlen(user_agent));
+    // sign request using the leaf key
+    flb_plg_debug(ctx->ins, "signing with tenancy: %s, fingerprint: %s", 
+                ctx->imds.tenancy_ocid, ctx->imds.fingerprint);
+    auth_header = sign_request_with_key(ctx, "POST", url_path, 
+                                      payload, date_header, host);
+    if (auth_header) {
+        flb_http_add_header(client, "Authorization", 13, 
+                          auth_header, flb_sds_len(auth_header));
+    }
+    ret = flb_http_do(client, &b_sent);
+    
+    if (ret != 0 || client->resp.status != 200) {
+        flb_plg_error(ctx->ins, "federation request failed with status %d: %s", 
+                     client->resp.status, client->resp.payload);
+        flb_plg_error(ctx->ins, "authentication failed with status %d", client->resp.status);
+        
+        flb_plg_debug(ctx->ins, "request headers:");
+        flb_plg_debug(ctx->ins, "  Authorization: %s", auth_header);
+        flb_plg_debug(ctx->ins, "  Date: %s", date_header);
+        flb_plg_debug(ctx->ins, "  Content-Type: application/json");
+        flb_plg_debug(ctx->ins, "  x-content-sha256: %s", b64_hash);
+        flb_plg_debug(ctx->ins, "request body: %s", payload);
+        goto cleanup;
+    }
+    
+    flb_plg_debug(ctx->ins, "status_code -> %d\nurl -> %s\n header -> %s", client->resp.status, client->uri, client->resp.data);
+    resp = flb_sds_create_len(client->resp.payload, client->resp.payload_size);
+    flb_plg_debug(ctx->ins, "resp->%s", resp);
+    if(parse_federation_response(resp, &ctx->security_token) < 0 ){
+        flb_plg_error(ctx->ins, "failed to parse federation response");
+        return NULL;
+    }
+    flb_plg_debug(ctx->ins, "ctx->security_token-> %s", ctx->security_token.token);
+
+    if (client->resp.payload && client->resp.payload_size > 0) {
+        resp = flb_sds_create_len(client->resp.payload, client->resp.payload_size);
+        
+        if (parse_federation_response(resp, &ctx->security_token) < 0) {
+            flb_plg_error(ctx->ins, "failed to parse federation response");
+            flb_sds_destroy(resp);
+            resp = NULL;
+            flb_free(b64_hash);
+            goto cleanup;
+        }
+        
+        decode_jwt_and_set_expires(ctx);
+    }
+cleanup:
+    if (auth_header) {
+        flb_sds_destroy(auth_header);
+    }
+    flb_sds_destroy(date_header);
+    flb_sds_destroy(url_path);
+    flb_free(host);
+    flb_http_client_destroy(client);
+    flb_upstream_conn_release(u_conn);
+    flb_upstream_destroy(upstream);
+    
+    return resp;
+}
+
 
 
 
@@ -776,7 +1241,21 @@ struct flb_oci_logan *flb_oci_logan_conf_create(struct flb_output_instance *ins,
             return NULL;
         }
         
-        flb_plg_debug(ctx->ins, "json_payload -> %s", json_payload);
+        flb_sds_t response = sign_and_send_federation_request(ctx, json_payload);
+        flb_sds_destroy(json_payload);
+        
+        if (!response) {
+            flb_oci_logan_conf_destroy(ctx);
+            return NULL;
+        }
+        flb_plg_debug(ctx->ins, "federation token -> %s", ctx->security_token.token);
+        flb_sds_destroy(response);
+        
+        if (ctx->imds.region) {
+            ctx->region = flb_sds_create(ctx->imds.region);
+        }
+        // still not fixed
+        return NULL;
     } else {
         if (!ctx->config_file_location) {
             flb_plg_error(ctx->ins, "config file location i's required for config_file auth mode");
