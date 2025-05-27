@@ -626,6 +626,327 @@ static flb_sds_t compose_uri(struct flb_oci_logan *ctx,
     return full_uri;
 }
 
+static flb_sds_t generate_request_id_safe(void)
+{
+    flb_sds_t request_id = flb_sds_create_size(37);
+    if (!request_id) {
+        return NULL;
+    }
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    srand(tv.tv_usec);
+    
+    // test
+    flb_sds_printf(&request_id, "%08X-%04X-%04X-%04X-%012X",
+                   (unsigned int)(tv.tv_sec & 0xFFFFFFFF),
+                   (unsigned int)(rand() & 0xFFFF),
+                   (unsigned int)(rand() & 0xFFFF),
+                   (unsigned int)(rand() & 0xFFFF),
+                   (unsigned int)(tv.tv_usec & 0xFFFFFFFF));
+    
+    return request_id;
+}
+
+static int token_needs_refresh(struct flb_oci_logan *ctx)
+{
+    time_t now = time(NULL);
+
+    return (ctx->security_token.expires_at - now) < 300;
+}
+
+static int refresh_security_token_if_needed(struct flb_oci_logan *ctx)
+{
+    if (!token_needs_refresh(ctx)) {
+        return 0;
+    }
+
+    
+    flb_sds_t json_payload = create_federation_payload(ctx);
+    if (!json_payload) {
+        return -1;
+    }
+
+    flb_sds_t response = sign_and_send_federation_request(ctx, json_payload);
+    flb_sds_destroy(json_payload);
+    
+    if (!response) {
+        return -1;
+    }
+
+    flb_sds_destroy(response);
+    flb_plg_info(ctx->ins, "success refresh security token");
+    return 0;
+}
+
+
+static flb_sds_t sign_oci_request_with_security_token_for_logging(
+    struct flb_oci_logan *ctx,
+    const char *method,
+    const char *uri_path,
+    const char *payload,
+    size_t payload_size,
+    flb_sds_t date,
+    const char *host,
+    const char *content_sha256,
+    flb_sds_t request_id)
+{
+    flb_sds_t string_to_sign = NULL;
+    flb_sds_t signature_header = NULL;
+    flb_sds_t lowercase_method = NULL;
+    unsigned char *signature = NULL;
+    unsigned char *b64_out = NULL;
+    size_t sig_len = 0;
+    BIO *bio = NULL;
+    EVP_PKEY *pkey = NULL;
+    EVP_MD_CTX *md_ctx = NULL;
+
+    string_to_sign = flb_sds_create_size(2048);
+    if (!string_to_sign) {
+        return NULL;
+    }
+
+    lowercase_method = flb_sds_create(method);
+    if (!lowercase_method) {
+        goto cleanup;
+    }
+
+    for (int i = 0; i < flb_sds_len(lowercase_method); i++) {
+        lowercase_method[i] = tolower(method[i]);
+    }
+
+    flb_sds_printf(&string_to_sign, "date: %s\n", date);
+    flb_sds_printf(&string_to_sign, "(request-target): %s %s\n", lowercase_method, uri_path);
+    flb_sds_printf(&string_to_sign, "host: %s\n", host);
+    flb_sds_printf(&string_to_sign, "x-content-sha256: %s\n", content_sha256);
+    
+    if (payload && payload_size > 0) {
+        flb_sds_printf(&string_to_sign, "content-type: application/octet-stream\n");
+        flb_sds_printf(&string_to_sign, "content-length: %zu", payload_size);
+    } else {
+        flb_sds_printf(&string_to_sign, "content-length: 0");
+    }
+
+    flb_plg_debug(ctx->ins, "String to sign for la ->> [%s]", string_to_sign);
+
+    bio = BIO_new_mem_buf((void*)ctx->imds.session_privkey, -1);
+    if (!bio) {
+        goto cleanup;
+    }
+
+    pkey = PEM_read_bio_PrivateKey(bio, NULL, NULL, NULL);
+    if (!pkey) {
+        goto cleanup;
+    }
+
+    md_ctx = EVP_MD_CTX_new();
+    if (!md_ctx) {
+        goto cleanup;
+    }
+
+    if (EVP_DigestSignInit(md_ctx, NULL, EVP_sha256(), NULL, pkey) <= 0) {
+        goto cleanup;
+    }
+
+    if (EVP_DigestSignUpdate(md_ctx, string_to_sign, flb_sds_len(string_to_sign)) <= 0) {
+        goto cleanup;
+    }
+
+    if (EVP_DigestSignFinal(md_ctx, NULL, &sig_len) <= 0) {
+        goto cleanup;
+    }
+
+    signature = flb_malloc(sig_len);
+    if (!signature) {
+        goto cleanup;
+    }
+
+    if (EVP_DigestSignFinal(md_ctx, signature, &sig_len) <= 0) {
+        goto cleanup;
+    }
+
+    size_t b64_size = ((sig_len + 2) / 3) * 4 + 1;
+    size_t olen = 0;
+    b64_out = flb_malloc(b64_size);
+    if (!b64_out) {
+        goto cleanup;
+    }
+
+    if (flb_base64_encode(b64_out, b64_size, &olen, signature, sig_len) != 0) {
+        goto cleanup;
+    }
+    b64_out[olen] = '\0';
+
+    signature_header = flb_sds_create_size(2048);
+    if (!signature_header) {
+        goto cleanup;
+    }
+    
+    const char *headers_list = payload && payload_size > 0 ? 
+        "date (request-target) host x-content-sha256 content-type content-length" :
+        "date (request-target) host x-content-sha256 content-length";
+    
+    flb_sds_printf(&signature_header,
+        "Signature version=\"1\",keyId=\"ST$%s\",algorithm=\"rsa-sha256\","
+        "signature=\"%s\",headers=\"%s\"", 
+        ctx->security_token.token,
+        b64_out,
+        headers_list);
+
+cleanup:
+    if (bio) BIO_free(bio);
+    if (pkey) EVP_PKEY_free(pkey);
+    if (md_ctx) EVP_MD_CTX_free(md_ctx);
+    if (signature) flb_free(signature);
+    if (b64_out) flb_free(b64_out);
+    if (string_to_sign) flb_sds_destroy(string_to_sign);
+    if (lowercase_method) flb_sds_destroy(lowercase_method);
+
+    return signature_header;
+}
+
+static char *calculate_content_sha256_b64(const char *content, size_t len)
+{
+    unsigned char hash[SHA256_DIGEST_LENGTH];
+    char *b64_hash = NULL;
+    size_t b64_len = 4 * ((SHA256_DIGEST_LENGTH + 2) / 3) + 1;
+    
+    SHA256((unsigned char*)content, len, hash);
+    
+    b64_hash = flb_malloc(b64_len);
+    if (!b64_hash) {
+        return NULL;
+    }
+    
+    if (flb_base64_encode(b64_hash, b64_len, &b64_len, hash, SHA256_DIGEST_LENGTH) != 0) {
+        flb_free(b64_hash);
+        return NULL;
+    }
+    b64_hash[b64_len] = '\0';
+    
+    return b64_hash;
+}
+
+struct flb_http_client *create_oci_signed_request_for_logging(
+    struct flb_oci_logan *ctx,
+    struct flb_connection *u_conn,
+    const char *method,
+    const char *uri_path,
+    const char *host,
+    int port,
+    const char *payload,
+    size_t payload_size)
+{
+    struct flb_http_client *client = NULL;
+    flb_sds_t date_header = NULL;
+    flb_sds_t request_id = NULL;
+    flb_sds_t auth_header = NULL;
+    flb_sds_t signature_header = NULL;
+    char *content_sha256 = NULL;
+    char date_buf[128];
+    time_t now;
+    struct tm *tm_info;
+
+
+    if (refresh_security_token_if_needed(ctx) < 0) {
+        flb_plg_error(ctx->ins, "refresh_security_token_if_needed failed ");
+        return NULL;
+    }
+
+    if (!ctx->security_token.token || flb_sds_len(ctx->security_token.token) == 0) {
+        return NULL;
+    }
+
+    time(&now);
+    tm_info = gmtime(&now);
+    if (!tm_info) {
+        return NULL;
+    }
+    
+    size_t date_len = strftime(date_buf, sizeof(date_buf) - 1, "%a, %d %b %Y %H:%M:%S GMT", tm_info);
+    if (date_len == 0) {
+        return NULL;
+    }
+    
+    date_buf[date_len] = '\0';
+    date_header = flb_sds_create_len(date_buf, date_len);
+    if (!date_header) {
+        return NULL;
+    }
+
+    request_id = generate_request_id_safe();
+    if (!request_id) {
+        goto cleanup;
+    }
+
+    if (payload && payload_size > 0) {
+        content_sha256 = calculate_content_sha256_b64(payload, payload_size);
+    } else {
+        content_sha256 = calculate_content_sha256_b64("", 0);
+    }
+    
+    if (!content_sha256) {
+        goto cleanup;
+    }
+
+    int http_method = FLB_HTTP_GET;
+    if (strcmp(method, "POST") == 0) {
+        http_method = FLB_HTTP_POST;
+    } else if (strcmp(method, "PUT") == 0) {
+        http_method = FLB_HTTP_PUT;
+    } else if (strcmp(method, "DELETE") == 0) {
+        http_method = FLB_HTTP_DELETE;
+    }
+
+    client = flb_http_client(u_conn, http_method, uri_path, 
+                            payload, payload_size, host, port, NULL, 0);
+    if (!client) {
+        goto cleanup;
+    }
+
+    flb_http_add_header(client, "Date", 4, date_header, flb_sds_len(date_header));
+    flb_http_add_header(client, "Accept", 6, "application/json", 16);
+    
+    if (payload && payload_size > 0) {
+        flb_http_add_header(client, "Content-Type", 12, "application/octet-stream", 24);
+    }
+    
+    flb_http_add_header(client, "x-content-sha256", 16, content_sha256, strlen(content_sha256));
+    flb_http_add_header(client, "opc-request-id", 14, request_id, flb_sds_len(request_id));
+
+    const char *user_agent = "fluent-bit-oci-plugin/1.0";
+    flb_http_add_header(client, "User-Agent", 10, user_agent, strlen(user_agent));
+
+    signature_header = sign_oci_request_with_security_token_for_logging(ctx, method, uri_path, 
+                                                                       payload, payload_size,
+                                                                       date_header, host, 
+                                                                       content_sha256, request_id);
+    if (!signature_header) {
+        goto cleanup;
+    }
+
+    flb_http_add_header(client, "Authorization", 13, signature_header, flb_sds_len(signature_header));
+
+
+
+    flb_sds_destroy(date_header);
+    flb_sds_destroy(request_id);
+    flb_sds_destroy(signature_header);
+    flb_free(content_sha256);
+
+    return client;
+
+cleanup:
+    if (client) flb_http_client_destroy(client);
+    if (date_header) flb_sds_destroy(date_header);
+    if (request_id) flb_sds_destroy(request_id);
+    if (signature_header) flb_sds_destroy(signature_header);
+    if (content_sha256) flb_free(content_sha256);
+    
+    return NULL;
+}
+
+
+
 static int flush_to_endpoint(struct flb_oci_logan *ctx,
                              flb_sds_t payload,
                              flb_sds_t log_group_id,
@@ -642,37 +963,51 @@ static int flush_to_endpoint(struct flb_oci_logan *ctx,
     if(!full_uri) {
         flb_plg_error(ctx->ins, "unable to compose uri for logGroup: %s logSet: %s",
                       ctx->oci_la_log_group_id, ctx->oci_la_log_set_id);
+        return FLB_ERROR;
     }
 
     flb_plg_debug(ctx->ins, "full_uri=%s", full_uri);
 
     u_conn = flb_upstream_conn_get(ctx->u);
     if(!u_conn) {
-        goto error_label;
+        flb_sds_destroy(full_uri);
+        return FLB_ERROR;
     }
-    /* Create HTTP client context */
-    c = flb_http_client(u_conn, FLB_HTTP_POST, full_uri, (void*) payload,
-                        flb_sds_len(payload), ctx->ins->host.name, ctx->ins->host.port, ctx->proxy, 0);
+
+    if (strcmp(ctx->auth_mode, "instance_principal") == 0) {
+        c = create_oci_signed_request_for_logging(ctx, u_conn, "POST", full_uri,
+                                                  ctx->ins->host.name, ctx->ins->host.port,
+                                                  payload, flb_sds_len(payload));
+    } else {
+        c = flb_http_client(u_conn, FLB_HTTP_POST, full_uri, (void*) payload,
+                            flb_sds_len(payload), ctx->ins->host.name, ctx->ins->host.port, ctx->proxy, 0);
+        if (!c) {
+            goto error_label;
+        }
+        flb_http_allow_duplicated_headers(c, FLB_FALSE);
+
+        flb_http_buffer_size(c, FLB_HTTP_DATA_SIZE_MAX);
+        
+        if (build_headers(c, ctx, payload, ctx->ins->host.name, ctx->ins->host.port, full_uri) < 0) {
+            flb_plg_error(ctx->ins, "failed to build headers");
+            goto error_label;
+        }
+    }
+
     if (!c) {
+        flb_plg_error(ctx->ins, "failed to create HTTP client");
         goto error_label;
     }
-    flb_http_allow_duplicated_headers(c, FLB_FALSE);
-
-    flb_plg_debug(ctx->ins, "built client");
-    flb_http_buffer_size(c, FLB_HTTP_DATA_SIZE_MAX);
-    if (build_headers(c, ctx, payload, ctx->ins->host.name, ctx->ins->host.port, full_uri) < 0) {
-        flb_plg_error(ctx->ins, "failed to build headers");
-        goto error_label;
-    }
-    flb_plg_debug(ctx->ins, "built request");
-
+    
     out_ret = FLB_OK;
 
     http_ret = flb_http_do(c, &b_sent);
-    flb_plg_debug(ctx->ins, "placed request");
+    FILE *p = fopen("flush_to_endpoint.log", "w");
+
+    fprintf(p, "%s\n", c->header_buf);
+    flb_plg_debug(ctx->ins,  "do request");
 
     if (http_ret == 0) {
-
         if (c->resp.status != 200) {
             flb_plg_debug(ctx->ins, "request header %s", c->header_buf);
 
@@ -694,6 +1029,8 @@ static int flush_to_endpoint(struct flb_oci_logan *ctx,
                               (out_ret == FLB_RETRY ? "true" : "false"),
                               c->resp.status);
             }
+        } else {
+            flb_plg_info(ctx->ins, "log sent to oci   with success");
         }
     }
     else {
@@ -704,9 +1041,7 @@ static int flush_to_endpoint(struct flb_oci_logan *ctx,
         goto error_label;
     }
 
-
-
-    error_label:
+error_label:
     if (full_uri) {
         flb_sds_destroy(full_uri);
     }
@@ -722,8 +1057,8 @@ static int flush_to_endpoint(struct flb_oci_logan *ctx,
     }
 
     return out_ret;
-
 }
+
 
 static void pack_oci_fields(msgpack_packer *packer,
                             struct flb_oci_logan *ctx)

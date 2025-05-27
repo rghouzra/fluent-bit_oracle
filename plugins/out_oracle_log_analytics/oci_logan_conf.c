@@ -678,7 +678,7 @@ static flb_sds_t sanitize_certificate(const char *cert_str) {
     return clean;
 }
 
-static flb_sds_t create_federation_payload(struct flb_oci_logan *ctx)
+flb_sds_t create_federation_payload(struct flb_oci_logan *ctx)
 {
     flb_sds_t payload = NULL;
     flb_sds_t leaf_cert = sanitize_certificate(ctx->imds.leaf_cert);
@@ -1038,7 +1038,7 @@ static int decode_jwt_and_set_expires(struct flb_oci_logan *ctx) {
     return 0;
 }
 
-static flb_sds_t sign_and_send_federation_request(struct flb_oci_logan *ctx, flb_sds_t payload)
+flb_sds_t sign_and_send_federation_request(struct flb_oci_logan *ctx, flb_sds_t payload)
 {
     struct flb_upstream *upstream;
     struct flb_http_client *client;
@@ -1255,7 +1255,6 @@ struct flb_oci_logan *flb_oci_logan_conf_create(struct flb_output_instance *ins,
             ctx->region = flb_sds_create(ctx->imds.region);
         }
         // still not fixed
-        return NULL;
     } else {
         if (!ctx->config_file_location) {
             flb_plg_error(ctx->ins, "config file location i's required for config_file auth mode");
