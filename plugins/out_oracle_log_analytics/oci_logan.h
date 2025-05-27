@@ -150,11 +150,45 @@
 #define FLB_OCI_ERROR_CODE_TOO_MANY_REQUESTS               "TooManyRequests"
 #define FLB_OCI_ERROR_CODE_INTERNAL_SERVER_ERROR           "InternalServerError"
 
+/* for imds request*/
+#define ORACLE_IMDS_HOST "169.254.169.254"
+#define ORACLE_IMDS_BASE_URL "/opc/v2"
+#define ORACLE_IMDS_REGION_PATH "/instance/region"
+#define ORACLE_IMDS_LEAF_CERT_PATH "/identity/cert.pem"
+#define ORACLE_IMDS_LEAF_KEY_PATH "/identity/key.pem"
+#define ORACLE_IMDS_INTERMEDIATE_CERT_PATH "/identity/intermediate.pem"
+#define ORACLE_AUTH_HEADER "Authorization: Bearer Oracle"
+#define ORACLE_IMDS_TOKEN_PATH "/opc/v2/instancePrincipal/token"
+
+
+#define COUNT_OF_REGION (sizeof(region_mappings) / sizeof(region_mappings[0]) - 1)
+
 #include <fluent-bit/flb_upstream.h>
 #include <fluent-bit/flb_sds.h>
 #include <fluent-bit/flb_record_accessor.h>
 #include <fluent-bit/flb_hash_table.h>
+#include <fluent-bit/flb_output_plugin.h>
+#include <fluent-bit/flb_upstream.h>
+#include <fluent-bit/flb_upstream_conn.h>
+#include <fluent-bit/flb_http_client.h>
+#include <fluent-bit/flb_log_event_decoder.h>
+#include <fluent-bit/flb_hash_table.h>
+#include <fluent-bit/flb_pack.h>
+#include <fluent-bit/flb_crypto.h>
+#include <fluent-bit/flb_base64.h>
+#include <fluent-bit/flb_hash.h>
+#include <fluent-bit/flb_sds.h>
 #include <monkey/mk_core/mk_list.h>
+#include "cJSON.h"
+#include <openssl/evp.h>
+#include <openssl/pem.h>
+#include <openssl/bio.h>
+#include <openssl/buffer.h>
+#include <openssl/err.h>
+#include <openssl/x509v3.h>
+#include <openssl/x509.h>
+#include <openssl/rsa.h>
+#include <openssl/pem.h>
 
 struct metadata_obj {
     flb_sds_t key;
@@ -168,6 +202,33 @@ struct flb_oci_error_response
   flb_sds_t code;
   flb_sds_t message;
 };
+
+struct flb_oracle_imds{
+  flb_sds_t region;
+  flb_sds_t leaf_cert;
+  flb_sds_t leaf_key;
+  flb_sds_t intermediate_cert;
+  flb_sds_t tenancy_ocid;
+  flb_sds_t federation_endpoint;
+  flb_sds_t fingerprint;
+  flb_sds_t compartment_ocid;
+  flb_sds_t session_pubkey;
+  flb_sds_t session_privkey;
+  struct flb_upstream *upstream;
+  struct flb_output_instance *ins;
+};
+
+struct oci_security_token {
+    flb_sds_t token;
+    time_t expires_at; 
+    flb_sds_t session_privkey;
+};
+
+typedef struct {
+    const char* short_name;
+    const char* long_name;
+} region_mapping_t;
+
 
 struct flb_oci_logan {
     flb_sds_t namespace;
@@ -208,8 +269,13 @@ struct flb_oci_logan {
     /* For OCI signing */
     flb_sds_t key_id; // tenancy/user/key_fingerprint
     flb_sds_t private_key;
-
     struct flb_output_instance *ins;
 
+    // temorary solution for region
+    // instance prinicip auth
+    struct flb_oracle_imds imds;
+    EVP_PKEY *session_key_pair;
+    struct oci_security_token security_token;
+    char *auth_mode;
 };
 #endif
