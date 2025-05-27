@@ -289,6 +289,92 @@ static flb_sds_t make_imds_request(struct flb_oci_logan *ctx, struct flb_connect
     return response;
 }
 
+static const region_mapping_t region_mappings[] = {
+    {"yny", "ap-chuncheon-1"},
+    {"hyd", "ap-hyderabad-1"},
+    {"mel", "ap-melbourne-1"},
+    {"bom", "ap-mumbai-1"},
+    {"kix", "ap-osaka-1"},
+    {"icn", "ap-seoul-1"},
+    {"syd", "ap-sydney-1"},
+    {"nrt", "ap-tokyo-1"},
+    {"yul", "ca-montreal-1"},
+    {"yyz", "ca-toronto-1"},
+    {"ams", "eu-amsterdam-1"},
+    {"fra", "eu-frankfurt-1"},
+    {"zrh", "eu-zurich-1"},
+    {"jed", "me-jeddah-1"},
+    {"dxb", "me-dubai-1"},
+    {"gru", "sa-saopaulo-1"},
+    {"cwl", "uk-cardiff-1"},
+    {"lhr", "uk-london-1"},
+    {"iad", "us-ashburn-1"},
+    {"phx", "us-phoenix-1"},
+    {"sjc", "us-sanjose-1"},
+    {"vcp", "sa-vinhedo-1"},
+    {"scl", "sa-santiago-1"},
+    {"mtz", "il-jerusalem-1"},
+    {"mrs", "eu-marseille-1"},
+    {"sin", "ap-singapore-1"},
+    {"auh", "me-abudhabi-1"},
+    {"lin", "eu-milan-1"},
+    {"arn", "eu-stockholm-1"},
+    {"jnb", "af-johannesburg-1"},
+    {"cdg", "eu-paris-1"},
+    {"qro", "mx-queretaro-1"},
+    {"mad", "eu-madrid-1"},
+    {"ord", "us-chicago-1"},
+    {"mty", "mx-monterrey-1"},
+    {"aga", "us-saltlake-2"},
+    {"bog", "sa-bogota-1"},
+    {"vap", "sa-valparaiso-1"},
+    {"xsp", "ap-singapore-2"},
+    {"ruh", "me-riyadh-1"},
+    {"lfi", "us-langley-1"},
+    {"luf", "us-luke-1"},
+    {"ric", "us-gov-ashburn-1"},
+    {"pia", "us-gov-chicago-1"},
+    {"tus", "us-gov-phoenix-1"},
+    {"ltn", "uk-gov-london-1"},
+    {"brs", "uk-gov-cardiff-1"},
+    {"nja", "ap-chiyoda-1"},
+    {"ukb", "ap-ibaraki-1"},
+    {"mct", "me-dcc-muscat-1"},
+    {"wga", "ap-dcc-canberra-1"},
+    {"bgy", "eu-dcc-milan-1"},
+    {"mxp", "eu-dcc-milan-2"},
+    {"snn", "eu-dcc-dublin-2"},
+    {"dtm", "eu-dcc-rating-2"},
+    {"dus", "eu-dcc-rating-1"},
+    {"ork", "eu-dcc-dublin-1"},
+    {"dac", "ap-dcc-gazipur-1"},
+    {"vll", "eu-madrid-2"},
+    {"str", "eu-frankfurt-2"},
+    {"beg", "eu-jovanovac-1"},
+    {"doh", "me-dcc-doha-1"},
+    {"ebb", "us-somerset-1"},
+    {"ebl", "us-thames-1"},
+    {"avz", "eu-dcc-zurich-1"},
+    {"avf", "eu-crissier-1"},
+    {"ahu", "me-abudhabi-3"},
+    {"rba", "me-alain-1"},
+    {"rkt", "me-abudhabi-2"},
+    {"shj", "me-abudhabi-4"},
+    {"dtz", "ap-seoul-2"},
+    {"dln", "ap-suwon-1"},
+    {"bno", "ap-chuncheon-2"},
+    {NULL, NULL}
+};
+
+char *long_region_name(char  *short_region_name) {
+    for (size_t i = 0; i < COUNT_OF_REGION; i++) {
+        if (strcmp(short_region_name, region_mappings[i].short_name) == 0) {
+            return (region_mappings[i].long_name);
+        }
+    }
+    return NULL; 
+}
+
 char *extract_region(const char *response) {
     const char *body_start = strstr(response, "\r\n\r\n");
     if (!body_start) {
@@ -313,8 +399,9 @@ char *extract_region(const char *response) {
 
     strncpy(region, body_start, len);
     region[len] = '\0';
-    // still have to convert it to long name
-    return region;
+    flb_sds_t lregion = flb_sds_create(long_region_name(region));
+    free(region);
+    return lregion;
 }
 
 char *extract_pem_content(const char *response, const char *begin_marker, const char *end_marker)
@@ -519,7 +606,7 @@ int get_keys_and_certs(struct flb_oci_logan *ctx, struct flb_config *config)
     }
     char *clean_int_cert = extract_pem_content(int_cert_resp, "-----BEGIN CERTIFICATE-----", "-----END CERTIFICATE-----");
     ctx->imds.region = clean_region_resp;
-    ctx->imds.region = "us-phoenix-1";
+    flb_plg_debug(ctx->ins, "ctx->imds->region %s", ctx->imds.region);
     ctx->imds.leaf_cert = clean_cert_resp;
     ctx->imds.intermediate_cert = int_cert_resp;
     char *pem_start = strstr(key_resp, "-----BEGIN");
@@ -541,7 +628,7 @@ int get_keys_and_certs(struct flb_oci_logan *ctx, struct flb_config *config)
     ctx->imds.federation_endpoint = flb_sds_create_size(128);
     // just temporary should be removed and replaced with something like mapping in python3 sdk
     flb_sds_printf(&ctx->imds.federation_endpoint, "https://auth.%s.oraclecloud.com/v1/x509", 
-                  flb_sds_create("us-phoenix-1"));
+                  ctx->imds.region);
     flb_upstream_conn_release(u_conn);
     flb_upstream_destroy(ctx->u);
     ctx->u = NULL;
@@ -1046,16 +1133,18 @@ flb_sds_t sign_and_send_federation_request(struct flb_oci_logan *ctx, flb_sds_t 
     int ret;
     struct flb_connection *u_conn;
     flb_sds_t resp = NULL;
-    char *host = NULL;
+    char *host = flb_calloc(100, 1);
     int port = 443;
     flb_sds_t url_path = flb_sds_create("/v1/x509");
     flb_sds_t auth_header = NULL;
     flb_sds_t date_header = NULL;
-    host = flb_strdup("auth.us-phoenix-1.oraclecloud.com");
+    flb_plg_debug(ctx->ins, "ctx->imds->region -> %s", ctx->imds.region);
+    sprintf(host, "auth.%s.oraclecloud.com", ctx->imds.region);
     time_t now;
     struct tm *tm_info;
     char date_buf[128];
 
+    flb_plg_debug(ctx->ins, "host -> %s", host);
     time(&now);
     tm_info = gmtime(&now);
     strftime(date_buf, sizeof(date_buf), "%a, %d %b %Y %H:%M:%S GMT", tm_info);

@@ -161,6 +161,8 @@
 #define ORACLE_IMDS_TOKEN_PATH "/opc/v2/instancePrincipal/token"
 
 
+#define COUNT_OF_REGION (sizeof(region_mappings) / sizeof(region_mappings[0]) - 1)
+
 #include <fluent-bit/flb_upstream.h>
 #include <fluent-bit/flb_sds.h>
 #include <fluent-bit/flb_record_accessor.h>
@@ -222,6 +224,12 @@ struct oci_security_token {
     flb_sds_t session_privkey;
 };
 
+typedef struct {
+    const char* short_name;
+    const char* long_name;
+} region_mapping_t;
+
+
 struct flb_oci_logan {
     flb_sds_t namespace;
     flb_sds_t config_file_location;
@@ -263,6 +271,7 @@ struct flb_oci_logan {
     flb_sds_t private_key;
     struct flb_output_instance *ins;
 
+    // temorary solution for region
     // instance prinicip auth
     struct flb_oracle_imds imds;
     EVP_PKEY *session_key_pair;
