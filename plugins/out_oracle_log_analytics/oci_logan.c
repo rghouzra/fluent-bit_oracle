@@ -839,7 +839,6 @@ struct flb_http_client *create_oci_signed_request_for_logging(
     struct flb_http_client *client = NULL;
     flb_sds_t date_header = NULL;
     flb_sds_t request_id = NULL;
-    flb_sds_t auth_header = NULL;
     flb_sds_t signature_header = NULL;
     char *content_sha256 = NULL;
     char date_buf[128];
