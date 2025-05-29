@@ -483,7 +483,7 @@ flb_sds_t calculate_certificate_fingerprint(struct flb_oci_logan *ctx, const cha
     return fingerprint;
 }
 
-bool extract_tenancy_compartment_ocid(struct flb_oci_logan *ctx, const char *cert_pem)
+bool extract_tenancy_ocid(struct flb_oci_logan *ctx, const char *cert_pem)
 {
     BIO *bio = BIO_new_mem_buf(cert_pem, -1);
     if (!bio) {
@@ -496,10 +496,7 @@ bool extract_tenancy_compartment_ocid(struct flb_oci_logan *ctx, const char *cer
         return 0;
     }
 
-
-
     flb_sds_t tenancy_ocid = NULL;
-    flb_sds_t compartment_ocid = NULL;
     X509_NAME *subject = X509_get_subject_name(cert);
     if (subject) {
         char buf[1024];
@@ -518,50 +515,18 @@ bool extract_tenancy_compartment_ocid(struct flb_oci_logan *ctx, const char *cer
                 const char *ocid = strchr(ou_str, ':');
                 if (ocid && strlen(ocid + 1) > 0) {
                     tenancy_ocid = flb_sds_create(ocid + 1);
-                    if(compartment_ocid)
-                        break;
-                }
-            }
-            else if(strstr(ou_str, "opc-compartment:ocid1.compartment") == ou_str){
-                const char *ocid = strchr(ou_str, ':');
-                if (ocid && strlen(ocid + 1) > 0) {
-                    compartment_ocid = flb_sds_create(ocid + 1);
-                    if(tenancy_ocid)
                         break;
                 }
             }
         }
     }
-    // BIO *out = BIO_new(BIO_s_mem());
-    // if (!out) {
-    //     flb_plg_error(ctx->ins, "failed to create BIO for printing certificate");
-    //     X509_free(cert);
-    //     return 0;
-    // }
-
-    // //just for debugging should be removed after
-    // X509_print(out, cert);
-
-    // char *cert_info = NULL;
-    // long len = BIO_get_mem_data(out, &cert_info);
-    // char *copy = malloc(len + 1);
-    // if (copy) {
-    //     memcpy(copy, cert_info, len);
-    //     copy[len] = '\0';
-    //     flb_plg_debug(ctx->ins, "full cert:\n%s", copy);
-    //     flb_plg_debug(ctx->ins, "eof cert");
-    //     free(copy);
-    // }
-
-    // BIO_free(out);
 
     X509_free(cert);
 
-    if (!tenancy_ocid || !compartment_ocid) {
+    if (!tenancy_ocid) {
         return 0;
     }
 
-    ctx->imds.compartment_ocid = compartment_ocid;
     ctx->imds.tenancy_ocid = tenancy_ocid;
     return 1;
 }
@@ -599,12 +564,10 @@ int get_keys_and_certs(struct flb_oci_logan *ctx, struct flb_config *config)
     if (!key_resp) {
         goto error;
     }
-    char *clean_private_key = extract_pem_content(key_resp, "-----BEGIN PRIVATE KEY-----", "-----END PRIVATE KEY-----");
-
     if (!int_cert_resp) {
         goto error;    
     }
-    char *clean_int_cert = extract_pem_content(int_cert_resp, "-----BEGIN CERTIFICATE-----", "-----END CERTIFICATE-----");
+
     ctx->imds.region = clean_region_resp;
     flb_plg_debug(ctx->ins, "ctx->imds->region %s", ctx->imds.region);
     ctx->imds.leaf_cert = clean_cert_resp;
@@ -618,15 +581,16 @@ int get_keys_and_certs(struct flb_oci_logan *ctx, struct flb_config *config)
     size_t pem_len = (pem_end - pem_start) + strlen("-----END RSA PRIVATE KEY-----") + 1;
     ctx->imds.leaf_key = flb_sds_create_len(pem_start, pem_len);
 
-    if (!extract_tenancy_compartment_ocid(ctx, clean_cert_resp)) {
+    if (!extract_tenancy_ocid(ctx, clean_cert_resp)) {
+        flb_plg_error(ctx->ins, "extract_tenancy_ocid failed" );
         goto error;
     }
     ctx->imds.fingerprint = calculate_certificate_fingerprint(ctx, clean_cert_resp);
     if(!ctx->imds.fingerprint){
+        flb_plg_error(ctx->ins, "calculate_certificate_fingerprint failed" );
         goto error;
     }
     ctx->imds.federation_endpoint = flb_sds_create_size(128);
-    // just temporary should be removed and replaced with something like mapping in python3 sdk
     flb_sds_printf(&ctx->imds.federation_endpoint, "https://auth.%s.oraclecloud.com/v1/x509", 
                   ctx->imds.region);
     flb_upstream_conn_release(u_conn);
@@ -654,6 +618,7 @@ error:
     flb_upstream_conn_release(u_conn);
     flb_upstream_destroy(ctx->u);
     ctx->u = NULL;
+    flb_plg_error(ctx->ins, "error: bloacl");
     return 0;
 }
 
@@ -711,10 +676,10 @@ char *extract_public_key_pem(EVP_PKEY *pkey) {
 char *extract_private_key_pem(EVP_PKEY *pkey) {
     BIO *bio = BIO_new(BIO_s_mem());
     if (!bio) {
-        return NULL; 
+        return NULL;
     }
     
-    if (!PEM_write_bio_PrivateKey(bio, pkey, NULL, NULL, NULL, NULL, NULL)) {
+    if (!PEM_write_bio_PrivateKey(bio, pkey, NULL, NULL, 0, NULL, NULL)) {
         BIO_free(bio);
         return NULL; 
     }
@@ -977,7 +942,6 @@ static flb_sds_t clean_token_string(flb_sds_t input) {
 static int parse_federation_response(flb_sds_t response,struct oci_security_token *token) {
     cJSON *json = NULL;
     cJSON *token_item = NULL;
-    int ret = -1;
     
     if (!response || !token) {
         return -1;
@@ -1306,7 +1270,8 @@ struct flb_oci_logan *flb_oci_logan_conf_create(struct flb_output_instance *ins,
         flb_plg_info(ctx->ins, "Using instance principal authentication");
         
         if (get_keys_and_certs(ctx, config) != 1) {
-            flb_oci_logan_conf_destroy(ctx);
+	    flb_plg_error(ctx->ins, "get_keys_and_certs_failed");
+	    flb_oci_logan_conf_destroy(ctx);
             return NULL;
         }
         

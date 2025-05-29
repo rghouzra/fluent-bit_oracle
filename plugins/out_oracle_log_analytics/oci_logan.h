@@ -211,7 +211,6 @@ struct flb_oracle_imds{
   flb_sds_t tenancy_ocid;
   flb_sds_t federation_endpoint;
   flb_sds_t fingerprint;
-  flb_sds_t compartment_ocid;
   flb_sds_t session_pubkey;
   flb_sds_t session_privkey;
   struct flb_upstream *upstream;
