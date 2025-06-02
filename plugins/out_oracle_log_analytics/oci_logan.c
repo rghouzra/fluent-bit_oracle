@@ -924,9 +924,6 @@ struct flb_http_client *create_oci_signed_request_for_logging(
     }
 
     flb_http_add_header(client, "Authorization", 13, signature_header, flb_sds_len(signature_header));
-
-
-
     flb_sds_destroy(date_header);
     flb_sds_destroy(request_id);
     flb_sds_destroy(signature_header);
@@ -977,6 +974,9 @@ static int flush_to_endpoint(struct flb_oci_logan *ctx,
         c = create_oci_signed_request_for_logging(ctx, u_conn, "POST", full_uri,
                                                   ctx->ins->host.name, ctx->ins->host.port,
                                                   payload, flb_sds_len(payload));
+        if (!c) {
+            goto error_label;
+        }
     } else {
         c = flb_http_client(u_conn, FLB_HTTP_POST, full_uri, (void*) payload,
                             flb_sds_len(payload), ctx->ins->host.name, ctx->ins->host.port, ctx->proxy, 0);
@@ -1029,6 +1029,7 @@ static int flush_to_endpoint(struct flb_oci_logan *ctx,
                               c->resp.status);
             }
         } else {
+            flb_plg_debug(ctx->ins, "data -> [%s]\theaders->[%s]", c->resp.data, c->resp.headers_end);
             flb_plg_info(ctx->ins, "log sent to oci   with success");
         }
     }

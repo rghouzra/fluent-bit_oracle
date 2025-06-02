@@ -209,7 +209,6 @@ struct flb_oracle_imds{
   flb_sds_t leaf_key;
   flb_sds_t intermediate_cert;
   flb_sds_t tenancy_ocid;
-  flb_sds_t federation_endpoint;
   flb_sds_t fingerprint;
   flb_sds_t session_pubkey;
   flb_sds_t session_privkey;
@@ -228,6 +227,10 @@ typedef struct {
     const char* long_name;
 } region_mapping_t;
 
+typedef struct {
+    const char* realm_code;
+    const char* domain_suffix;
+} realm_mapping_t;
 
 struct flb_oci_logan {
     flb_sds_t namespace;

@@ -366,6 +366,95 @@ static const region_mapping_t region_mappings[] = {
     {NULL, NULL}
 };
 
+static const realm_mapping_t realm_mappings[] = {
+    {"oc1", "oraclecloud.com"},
+    {"oc2", "oraclegovcloud.com"},
+    {"oc3", "oraclegovcloud.com"},
+    {"oc4", "oraclegovcloud.uk"},
+    {"oc8", "oraclecloud8.com"},
+    {"oc9", "oraclecloud9.com"},
+    {"oc10", "oraclecloud10.com"},
+    {"oc14", "oraclecloud14.com"},
+    {"oc15", "oraclecloud15.com"},
+    {"oc19", "oraclecloud.eu"},
+    {"oc20", "oraclecloud20.com"},
+    {"oc21", "oraclecloud21.com"},
+    {"oc23", "oraclecloud23.com"},
+    {"oc24", "oraclecloud24.com"},
+    {"oc26", "oraclecloud26.com"},
+    {"oc29", "oraclecloud29.com"},
+    {"oc35", "oraclecloud35.com"},
+    {NULL, NULL}
+};
+
+static const char* gov_region_patterns[] = {
+    "us-gov-",
+    "uk-gov-",
+    "ca-gov-",
+    NULL
+};
+
+static const char* determine_realm_from_region(const char* region) {
+    if (!region) {
+        return "oc1";
+    }
+    for (int i = 0; gov_region_patterns[i] != NULL; i++) {
+        if (strstr(region, gov_region_patterns[i]) == region) {
+            if (strstr(region, "us-gov-") == region) {
+                return "oc3";
+            } else if (strstr(region, "uk-gov-") == region) {
+                return "oc4";
+            } else if (strstr(region, "ca-gov-") == region) {
+                return "oc3";
+            }
+        }
+    }
+    
+    if (strstr(region, "eu-") == region) {
+        if (strstr(region, "eu-frankfurt-") || strstr(region, "eu-zurich-")) {
+            return "oc19";
+        }
+    }
+    // !still to be tested
+    // for now i tested only the oc1
+    return "oc1";
+}
+
+static const char* get_domain_suffix_for_realm(const char* realm) {
+    if (!realm) {
+        return "oraclecloud.com";
+    }
+    
+    for (int i = 0; realm_mappings[i].realm_code != NULL; i++) {
+        if (strcmp(realm, realm_mappings[i].realm_code) == 0) {
+            return realm_mappings[i].domain_suffix;
+        }
+    }
+    
+    return "oraclecloud.com";
+}
+
+static flb_sds_t construct_oci_host(const char* service, const char* region) {
+    if (!service || !region) {
+        return NULL;
+    }
+
+    const char* realm = determine_realm_from_region(region);
+    const char* domain_suffix = get_domain_suffix_for_realm(realm);
+    fprintf(stderr, "construct_oci_host::realm->[%s]\n", realm);
+    fprintf(stderr, "construct_oci_host::domain_suffix->[%s]\n", domain_suffix);
+    
+    flb_sds_t host = flb_sds_create_size(256);
+    if (!host) {
+        return NULL;
+    }
+    
+    flb_sds_snprintf(&host, flb_sds_alloc(host), "%s.%s.oci.%s", 
+                     service, region, domain_suffix);
+    fprintf(stderr, "construct_oci_host::host->[%s]\n", host);
+    return host;
+}
+
 char *long_region_name(char  *short_region_name) {
     for (size_t i = 0; i < COUNT_OF_REGION; i++) {
         if (strcmp(short_region_name, region_mappings[i].short_name) == 0) {
@@ -590,9 +679,6 @@ int get_keys_and_certs(struct flb_oci_logan *ctx, struct flb_config *config)
         flb_plg_error(ctx->ins, "calculate_certificate_fingerprint failed" );
         goto error;
     }
-    ctx->imds.federation_endpoint = flb_sds_create_size(128);
-    flb_sds_printf(&ctx->imds.federation_endpoint, "https://auth.%s.oraclecloud.com/v1/x509", 
-                  ctx->imds.region);
     flb_upstream_conn_release(u_conn);
     flb_upstream_destroy(ctx->u);
     ctx->u = NULL;
@@ -1097,17 +1183,20 @@ flb_sds_t sign_and_send_federation_request(struct flb_oci_logan *ctx, flb_sds_t 
     int ret;
     struct flb_connection *u_conn;
     flb_sds_t resp = NULL;
-    char *host = flb_calloc(100, 1);
     int port = 443;
     flb_sds_t url_path = flb_sds_create("/v1/x509");
     flb_sds_t auth_header = NULL;
     flb_sds_t date_header = NULL;
     flb_plg_debug(ctx->ins, "ctx->imds->region -> %s", ctx->imds.region);
-    sprintf(host, "auth.%s.oraclecloud.com", ctx->imds.region);
+    // char *host = flb_calloc(100, 1);
+    // sprintf(host, "auth.%s.oraclecloud.com", ctx->imds.region);
+    flb_sds_t tmp_host = construct_oci_host("auth", ctx->imds.region);
+    char *host = flb_calloc(flb_sds_len(tmp_host) + 1, 1);
     time_t now;
     struct tm *tm_info;
     char date_buf[128];
 
+    strcpy(host, tmp_host);
     flb_plg_debug(ctx->ins, "host -> %s", host);
     time(&now);
     tm_info = gmtime(&now);
@@ -1232,9 +1321,6 @@ cleanup:
     
     return resp;
 }
-
-
-
 
 struct flb_oci_logan *flb_oci_logan_conf_create(struct flb_output_instance *ins,
                                                 struct flb_config *config) {
@@ -1372,10 +1458,10 @@ struct flb_oci_logan *flb_oci_logan_conf_create(struct flb_output_instance *ins,
             flb_oci_logan_conf_destroy(ctx);
             return NULL;
         }
-        host = flb_sds_create_size(512);
-        flb_sds_snprintf(&host, flb_sds_alloc(host), "loganalytics.%s.oci.oraclecloud.com", ctx->region);
+        // host = flb_sds_create_size(512);
+        // flb_sds_snprintf(&host, flb_sds_alloc(host), "loganalytics.%s.oci.oraclecloud.com", ctx->region);
+        host = construct_oci_host("loganalytics", ctx->region);
     }
-
     if (!ctx->uri) {
         if (!ctx->namespace) {
             flb_plg_error(ctx->ins, "Namespace is required");
