@@ -1439,7 +1439,7 @@ static int total_flush(struct flb_event_chunk *event_chunk,
     /* pack_oci_fields(&mp_pck, ctx); */
 
     num_records = flb_mp_count(event_chunk->data, event_chunk->size);
-
+    // add checker for size
     while ((ret = flb_log_event_decoder_next(
         &log_decoder,
         &log_event)) == FLB_EVENT_DECODER_SUCCESS) {
