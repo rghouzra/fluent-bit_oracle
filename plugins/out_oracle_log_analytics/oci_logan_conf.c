@@ -386,37 +386,96 @@ static const realm_mapping_t realm_mappings[] = {
     {"oc35", "oraclecloud35.com"},
     {NULL, NULL}
 };
+//ref--> github.com/oracle/oci-python-sdk/blob/ba91eb1a51b0c1a38603dec0373a33f9b9962f8a/src/oci/regions_definitions.py 
+// still  it have to be updated depending on new oraclecloudXX
 
-static const char* gov_region_patterns[] = {
-    "us-gov-",
-    "uk-gov-",
-    "ca-gov-",
-    NULL
+static const region_realm_mapping_t region_realm_mappings[] = {
+    {"ap-chuncheon-1", "oc1"},
+    {"ap-hyderabad-1", "oc1"},
+    {"ap-melbourne-1", "oc1"},
+    {"ap-mumbai-1", "oc1"},
+    {"ap-osaka-1", "oc1"},
+    {"ap-seoul-1", "oc1"},
+    {"ap-sydney-1", "oc1"},
+    {"ap-tokyo-1", "oc1"},
+    {"ca-montreal-1", "oc1"},
+    {"ca-toronto-1", "oc1"},
+    {"eu-amsterdam-1", "oc1"},
+    {"eu-frankfurt-1", "oc1"},
+    {"eu-zurich-1", "oc1"},
+    {"me-jeddah-1", "oc1"},
+    {"me-dubai-1", "oc1"},
+    {"sa-saopaulo-1", "oc1"},
+    {"uk-cardiff-1", "oc1"},
+    {"uk-london-1", "oc1"},
+    {"us-ashburn-1", "oc1"},
+    {"us-phoenix-1", "oc1"},
+    {"us-sanjose-1", "oc1"},
+    {"sa-vinhedo-1", "oc1"},
+    {"sa-santiago-1", "oc1"},
+    {"il-jerusalem-1", "oc1"},
+    {"eu-marseille-1", "oc1"},
+    {"ap-singapore-1", "oc1"},
+    {"me-abudhabi-1", "oc1"},
+    {"eu-milan-1", "oc1"},
+    {"eu-stockholm-1", "oc1"},
+    {"af-johannesburg-1", "oc1"},
+    {"eu-paris-1", "oc1"},
+    {"mx-queretaro-1", "oc1"},
+    {"eu-madrid-1", "oc1"},
+    {"us-chicago-1", "oc1"},
+    {"mx-monterrey-1", "oc1"},
+    {"us-saltlake-2", "oc1"},
+    {"sa-bogota-1", "oc1"},
+    {"sa-valparaiso-1", "oc1"},
+    {"ap-singapore-2", "oc1"},
+    {"me-riyadh-1", "oc1"},
+    {"us-langley-1", "oc2"},
+    {"us-luke-1", "oc2"},
+    {"us-gov-ashburn-1", "oc3"},
+    {"us-gov-chicago-1", "oc3"},
+    {"us-gov-phoenix-1", "oc3"},
+    {"uk-gov-london-1", "oc4"},
+    {"uk-gov-cardiff-1", "oc4"},
+    {"ap-chiyoda-1", "oc8"},
+    {"ap-ibaraki-1", "oc8"},
+    {"me-dcc-muscat-1", "oc9"},
+    {"ap-dcc-canberra-1", "oc10"},
+    {"eu-dcc-milan-1", "oc14"},
+    {"eu-dcc-milan-2", "oc14"},
+    {"eu-dcc-dublin-2", "oc14"},
+    {"eu-dcc-rating-2", "oc14"},
+    {"eu-dcc-rating-1", "oc14"},
+    {"eu-dcc-dublin-1", "oc14"},
+    {"ap-dcc-gazipur-1", "oc15"},
+    {"eu-madrid-2", "oc19"},
+    {"eu-frankfurt-2", "oc19"},
+    {"eu-jovanovac-1", "oc20"},
+    {"me-dcc-doha-1", "oc21"},
+    {"us-somerset-1", "oc23"},
+    {"us-thames-1", "oc23"},
+    {"eu-dcc-zurich-1", "oc24"},
+    {"eu-crissier-1", "oc24"},
+    {"me-abudhabi-3", "oc26"},
+    {"me-alain-1", "oc26"},
+    {"me-abudhabi-2", "oc29"},
+    {"me-abudhabi-4", "oc29"},
+    {"ap-seoul-2", "oc35"},
+    {"ap-suwon-1", "oc35"},
+    {"ap-chuncheon-2", "oc35"}, 
+    {NULL, NULL}
 };
 
 static const char* determine_realm_from_region(const char* region) {
     if (!region) {
         return "oc1";
     }
-    for (int i = 0; gov_region_patterns[i] != NULL; i++) {
-        if (strstr(region, gov_region_patterns[i]) == region) {
-            if (strstr(region, "us-gov-") == region) {
-                return "oc3";
-            } else if (strstr(region, "uk-gov-") == region) {
-                return "oc4";
-            } else if (strstr(region, "ca-gov-") == region) {
-                return "oc3";
-            }
-        }
-    }
     
-    if (strstr(region, "eu-") == region) {
-        if (strstr(region, "eu-frankfurt-") || strstr(region, "eu-zurich-")) {
-            return "oc19";
+    for (int i = 0; region_realm_mappings[i].region != NULL; i++) {
+        if (strcmp(region, region_realm_mappings[i].region) == 0) {
+            return region_realm_mappings[i].realm;
         }
     }
-    // !still to be tested
-    // for now i tested only the oc1
     return "oc1";
 }
 
@@ -451,11 +510,11 @@ static flb_sds_t construct_oci_host(const char* service, const char* region) {
     
     flb_sds_snprintf(&host, flb_sds_alloc(host), "%s.%s.oci.%s", 
                      service, region, domain_suffix);
-    fprintf(stderr, "construct_oci_host::host->[%s]\n", host);
+    // fprintf(stderr, "construct_oci_host::host->[%s]\n", host);
     return host;
 }
 
-char *long_region_name(char  *short_region_name) {
+const char *long_region_name(char  *short_region_name) {
     for (size_t i = 0; i < COUNT_OF_REGION; i++) {
         if (strcmp(short_region_name, region_mappings[i].short_name) == 0) {
             return (region_mappings[i].long_name);
@@ -464,7 +523,7 @@ char *long_region_name(char  *short_region_name) {
     return NULL; 
 }
 
-char *extract_region(const char *response) {
+flb_sds_t extract_region(const char *response) {
     const char *body_start = strstr(response, "\r\n\r\n");
     if (!body_start) {
         return NULL;
@@ -642,7 +701,7 @@ int get_keys_and_certs(struct flb_oci_logan *ctx, struct flb_config *config)
         flb_plg_error(ctx->ins, "failed to get region from IMDS");
         goto error;
     }
-    char *clean_region_resp = extract_region(region_resp);
+    flb_sds_t clean_region_resp = extract_region(region_resp);
 
     if (!cert_resp) {
         flb_plg_error(ctx->ins, "failed to get leaf cert from IMDS");
@@ -712,6 +771,7 @@ static EVP_PKEY *generate_session_key_pair(struct flb_oci_logan *ctx)
 {
     EVP_PKEY *pkey = EVP_PKEY_new();
     BIGNUM *bn = BN_new();
+    // it still to be updated since its deprecated after openssl 3.0
     RSA *rsa = RSA_new();
     int rc;
 
@@ -903,7 +963,7 @@ static flb_sds_t sign_request_with_key(struct flb_oci_logan *ctx,
     if (!b64_hash) {
         goto cleanup;
     }
-    if (flb_base64_encode(b64_hash, b64_len, &b64_len, hash, SHA256_DIGEST_LENGTH) != 0) {
+    if (flb_base64_encode((unsigned char *)b64_hash, b64_len, &b64_len, hash, SHA256_DIGEST_LENGTH) != 0) {
         flb_free(b64_hash);
         goto cleanup;
     }
@@ -1119,8 +1179,7 @@ static int decode_jwt_and_set_expires(struct flb_oci_logan *ctx) {
         flb_free(payload_b64);
         return -1;
     }
-    
-    size_t olen = 0;
+
     int ret = flb_base64_decode((unsigned char *)decoded_payload, decoded_len, 
                                &decoded_len, (unsigned char *)payload_b64, b64_len);
     if (ret != 0) {
@@ -1254,7 +1313,7 @@ flb_sds_t sign_and_send_federation_request(struct flb_oci_logan *ctx, flb_sds_t 
     if (!b64_hash) {
         goto cleanup;
     }
-    if (flb_base64_encode(b64_hash, b64_len, &b64_len, hash, SHA256_DIGEST_LENGTH) != 0) {
+    if (flb_base64_encode((unsigned char *)b64_hash, b64_len, &b64_len, hash, SHA256_DIGEST_LENGTH) != 0) {
         flb_free(b64_hash);
         goto cleanup;
     }
@@ -1328,7 +1387,6 @@ struct flb_oci_logan *flb_oci_logan_conf_create(struct flb_output_instance *ins,
     struct flb_upstream *upstream;
     flb_sds_t host = NULL;
     int io_flags = 0, default_port;
-    const char *tmp;
     int ret = 0;
     char *protocol = NULL;
     char *p_host = NULL;
@@ -1462,6 +1520,7 @@ struct flb_oci_logan *flb_oci_logan_conf_create(struct flb_output_instance *ins,
         // flb_sds_snprintf(&host, flb_sds_alloc(host), "loganalytics.%s.oci.oraclecloud.com", ctx->region);
         host = construct_oci_host("loganalytics", ctx->region);
     }
+    flb_plg_debug(ctx->ins, "host -> %s", host);
     if (!ctx->uri) {
         if (!ctx->namespace) {
             flb_plg_error(ctx->ins, "Namespace is required");

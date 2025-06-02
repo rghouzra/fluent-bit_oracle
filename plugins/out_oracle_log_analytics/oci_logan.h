@@ -197,6 +197,11 @@ struct metadata_obj {
 
 };
 
+typedef struct {
+    const char* region;
+    const char* realm;
+} region_realm_mapping_t;
+
 struct flb_oci_error_response
 {
   flb_sds_t code;
