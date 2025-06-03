@@ -547,7 +547,7 @@ flb_sds_t extract_region(const char *response) {
 
     strncpy(region, body_start, len);
     region[len] = '\0';
-    flb_sds_t lregion = flb_sds_create(long_region_name(region));
+    flb_sds_t lregion = flb_sds_create(long_region_name(region));// should be freed later
     free(region);
     return lregion;
 }
@@ -567,13 +567,12 @@ char *extract_pem_content(const char *response, const char *begin_marker, const 
     end += strlen(end_marker);
 
     size_t pem_length = end - start;
-    char *pem_content = malloc(pem_length + 1);
+    char *pem_content = flb_calloc(pem_length + 1, 1);
     if (!pem_content) {
         return NULL;
     }
 
     strncpy(pem_content, start, pem_length);
-    pem_content[pem_length] = '\0';
 
     return pem_content;
 }
@@ -617,7 +616,7 @@ flb_sds_t calculate_certificate_fingerprint(struct flb_oci_logan *ctx, const cha
         *(p-1) = '\0';
     }
     
-    fingerprint = flb_sds_create(hex_fingerprint);
+    fingerprint = flb_sds_create(hex_fingerprint);// should be freed later
 
     for (int i = 0; i< flb_sds_len(fingerprint);i++){
         if (islower(fingerprint[i])) {
@@ -662,7 +661,7 @@ bool extract_tenancy_ocid(struct flb_oci_logan *ctx, const char *cert_pem)
             if (strstr(ou_str, "opc-tenant:ocid1.tenancy") == ou_str) {
                 const char *ocid = strchr(ou_str, ':');
                 if (ocid && strlen(ocid + 1) > 0) {
-                    tenancy_ocid = flb_sds_create(ocid + 1);
+                    tenancy_ocid = flb_sds_create(ocid + 1);// should be freed later
                         break;
                 }
             }
@@ -693,28 +692,30 @@ int get_keys_and_certs(struct flb_oci_logan *ctx, struct flb_config *config)
         return 0;
     }
     flb_sds_t region_resp = make_imds_request(ctx, u_conn, ORACLE_IMDS_BASE_URL ORACLE_IMDS_REGION_PATH);
-    flb_sds_t cert_resp = make_imds_request(ctx, u_conn, ORACLE_IMDS_BASE_URL ORACLE_IMDS_LEAF_CERT_PATH);
-    flb_sds_t key_resp = make_imds_request(ctx, u_conn, ORACLE_IMDS_BASE_URL ORACLE_IMDS_LEAF_KEY_PATH);
-    flb_sds_t int_cert_resp = make_imds_request(ctx, u_conn, ORACLE_IMDS_BASE_URL ORACLE_IMDS_INTERMEDIATE_CERT_PATH);
-
     if (!region_resp) {
         flb_plg_error(ctx->ins, "failed to get region from IMDS");
         goto error;
     }
-    flb_sds_t clean_region_resp = extract_region(region_resp);
-
+    flb_sds_t cert_resp = make_imds_request(ctx, u_conn, ORACLE_IMDS_BASE_URL ORACLE_IMDS_LEAF_CERT_PATH);
     if (!cert_resp) {
-        flb_plg_error(ctx->ins, "failed to get leaf cert from IMDS");
+        flb_plg_error(ctx->ins, "failed to get leaf certificate from IMDS");
         goto error;
     }
-    // still to be freed
-    char *clean_cert_resp = extract_pem_content(cert_resp, "-----BEGIN CERTIFICATE-----", "-----END CERTIFICATE-----");
+    flb_sds_t key_resp = make_imds_request(ctx, u_conn, ORACLE_IMDS_BASE_URL ORACLE_IMDS_LEAF_KEY_PATH);// should be freed later
     if (!key_resp) {
+        flb_plg_error(ctx->ins, "failed to get leaf key from IMDS");
         goto error;
     }
+    flb_sds_t int_cert_resp = make_imds_request(ctx, u_conn, ORACLE_IMDS_BASE_URL ORACLE_IMDS_INTERMEDIATE_CERT_PATH); // should be freed later
     if (!int_cert_resp) {
+        flb_plg_error(ctx->ins, "failed to get intermediate certificate from IMDS");
         goto error;    
     }
+    flb_sds_t clean_region_resp = extract_region(region_resp);
+    flb_sds_destroy(region_resp);
+    
+    char *clean_cert_resp = extract_pem_content(cert_resp, "-----BEGIN CERTIFICATE-----", "-----END CERTIFICATE-----"); // should be freed later
+    flb_sds_destroy(cert_resp);
 
     ctx->imds.region = clean_region_resp;
     flb_plg_debug(ctx->ins, "ctx->imds->region %s", ctx->imds.region);
@@ -724,10 +725,10 @@ int get_keys_and_certs(struct flb_oci_logan *ctx, struct flb_config *config)
     char *pem_end = strstr(key_resp, "-----END");
     if (!pem_start || !pem_end) {
         flb_plg_error(ctx->ins, "No valid PEM block found");
-        return -1;
+        goto error;
     }
     size_t pem_len = (pem_end - pem_start) + strlen("-----END RSA PRIVATE KEY-----") + 1;
-    ctx->imds.leaf_key = flb_sds_create_len(pem_start, pem_len);
+    ctx->imds.leaf_key = flb_sds_create_len(pem_start, pem_len);// should be freed later
 
     if (!extract_tenancy_ocid(ctx, clean_cert_resp)) {
         flb_plg_error(ctx->ins, "extract_tenancy_ocid failed" );
@@ -879,12 +880,12 @@ static flb_sds_t sanitize_certificate(const char *cert_str) {
 flb_sds_t create_federation_payload(struct flb_oci_logan *ctx)
 {
     flb_sds_t payload = NULL;
-    flb_sds_t leaf_cert = sanitize_certificate(ctx->imds.leaf_cert);
+    flb_sds_t leaf_cert = sanitize_certificate(ctx->imds.leaf_cert); // should be freed later
     flb_sds_t session_pubkey = sanitize_certificate(ctx->imds.session_pubkey);
-    flb_sds_t intermediate_certs = sanitize_certificate(ctx->imds.intermediate_cert);
+    flb_sds_t intermediate_certs = sanitize_certificate(ctx->imds.intermediate_cert);// should be freed later
 
     if (ctx->imds.intermediate_cert) {
-        intermediate_certs = sanitize_certificate(ctx->imds.intermediate_cert);
+        intermediate_certs = sanitize_certificate(ctx->imds.intermediate_cert);// should be freed later
     }
 
     payload = flb_sds_create_size(8192);
@@ -1110,7 +1111,7 @@ static int parse_federation_response(flb_sds_t response,struct oci_security_toke
         return -1;
     }
     
-    flb_sds_t raw_token = flb_sds_create(token_str);
+    flb_sds_t raw_token = flb_sds_create(token_str);// should be freed later
     if (!raw_token) {
         cJSON_Delete(json);
         return -1;
@@ -1256,6 +1257,7 @@ flb_sds_t sign_and_send_federation_request(struct flb_oci_logan *ctx, flb_sds_t 
     char date_buf[128];
 
     strcpy(host, tmp_host);
+    flb_sds_destroy(tmp_host);
     flb_plg_debug(ctx->ins, "host -> %s", host);
     time(&now);
     tm_info = gmtime(&now);
@@ -1425,21 +1427,21 @@ struct flb_oci_logan *flb_oci_logan_conf_create(struct flb_output_instance *ins,
             return NULL;
         }
         
-        ctx->imds.session_pubkey = extract_public_key_pem(ctx->session_key_pair);
-        ctx->imds.session_privkey = extract_private_key_pem(ctx->session_key_pair);
+        ctx->imds.session_pubkey = extract_public_key_pem(ctx->session_key_pair);// should be freed later
+        ctx->imds.session_privkey = extract_private_key_pem(ctx->session_key_pair);// should be freed later
         
         if (!ctx->imds.session_pubkey || !ctx->imds.session_privkey) {
             flb_oci_logan_conf_destroy(ctx);
             return NULL;
         }
         
-        flb_sds_t json_payload = create_federation_payload(ctx);
+        flb_sds_t json_payload = create_federation_payload(ctx);// should be freed later
         if (!json_payload) {
             flb_oci_logan_conf_destroy(ctx);
             return NULL;
         }
         
-        flb_sds_t response = sign_and_send_federation_request(ctx, json_payload);
+        flb_sds_t response = sign_and_send_federation_request(ctx, json_payload); // should be freed later
         flb_sds_destroy(json_payload);
         
         if (!response) {
@@ -1518,7 +1520,7 @@ struct flb_oci_logan *flb_oci_logan_conf_create(struct flb_output_instance *ins,
         }
         // host = flb_sds_create_size(512);
         // flb_sds_snprintf(&host, flb_sds_alloc(host), "loganalytics.%s.oci.oraclecloud.com", ctx->region);
-        host = construct_oci_host("loganalytics", ctx->region);
+        host = construct_oci_host("loganalytics", ctx->region);// should be freed later
     }
     flb_plg_debug(ctx->ins, "host -> %s", host);
     if (!ctx->uri) {
