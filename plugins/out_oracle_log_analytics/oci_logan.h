@@ -97,7 +97,7 @@
 #define FLB_OCI_PARAM_INCLUDE_COLLECT_TIME "include_collect_time"
 #define FLB_OCI_PARAM_INCLUDE_COLLECT_TIME_SIZE sizeof(FLB_OCI_PARAM_INCLUDE_COLLECT_TIME)-1
 
-#define FLB_OCI_MATCH_ID_MAX 1000 // TO avoid too large memory allocation
+#define FLB_OCI_MATCH_ID_MAX 1000       // TO avoid too large memory allocation
 
 #define FLB_OCI_DEFAULT_COLLECT_TIME       "oci_collect_time"
 #define FLB_OCI_DEFAULT_COLLECT_TIME_SIZE sizeof(FLB_OCI_DEFAULT_COLLECT_TIME)-1
@@ -190,54 +190,61 @@
 #include <openssl/rsa.h>
 #include <openssl/pem.h>
 
-struct metadata_obj {
+struct metadata_obj
+{
     flb_sds_t key;
     flb_sds_t val;
     struct mk_list _head;
 
 };
 
-typedef struct {
-    const char* region;
-    const char* realm;
+typedef struct
+{
+    const char *region;
+    const char *realm;
 } region_realm_mapping_t;
 
 struct flb_oci_error_response
 {
-  flb_sds_t code;
-  flb_sds_t message;
+    flb_sds_t code;
+    flb_sds_t message;
 };
 
-struct flb_oracle_imds{
-  flb_sds_t region;
-  flb_sds_t leaf_cert;
-  flb_sds_t leaf_key;
-  flb_sds_t intermediate_cert;
-  flb_sds_t tenancy_ocid;
-  flb_sds_t fingerprint;
-  flb_sds_t session_pubkey;
-  flb_sds_t session_privkey;
-  struct flb_upstream *upstream;
-  struct flb_output_instance *ins;
+struct flb_oracle_imds
+{
+    flb_sds_t region;
+    flb_sds_t leaf_cert;
+    flb_sds_t leaf_key;
+    flb_sds_t intermediate_cert;
+    flb_sds_t tenancy_ocid;
+    flb_sds_t fingerprint;
+    flb_sds_t session_pubkey;
+    flb_sds_t session_privkey;
+    struct flb_upstream *upstream;
+    struct flb_output_instance *ins;
 };
 
-struct oci_security_token {
+struct oci_security_token
+{
     flb_sds_t token;
-    time_t expires_at; 
+    time_t expires_at;
     flb_sds_t session_privkey;
 };
 
-typedef struct {
-    const char* short_name;
-    const char* long_name;
+typedef struct
+{
+    const char *short_name;
+    const char *long_name;
 } region_mapping_t;
 
-typedef struct {
-    const char* realm_code;
-    const char* domain_suffix;
+typedef struct
+{
+    const char *realm_code;
+    const char *domain_suffix;
 } realm_mapping_t;
 
-struct flb_oci_logan {
+struct flb_oci_logan
+{
     flb_sds_t namespace;
     flb_sds_t config_file_location;
     flb_sds_t profile_name;
@@ -267,14 +274,14 @@ struct flb_oci_logan {
     struct mk_list *oci_la_metadata;
     struct mk_list log_event_metadata_fields;
 
-  // config_file
+    // config_file
     flb_sds_t user;
     flb_sds_t region;
     flb_sds_t tenancy;
     flb_sds_t key_fingerprint;
     flb_sds_t key_file;
     /* For OCI signing */
-    flb_sds_t key_id; // tenancy/user/key_fingerprint
+    flb_sds_t key_id;           // tenancy/user/key_fingerprint
     flb_sds_t private_key;
     struct flb_output_instance *ins;
 
