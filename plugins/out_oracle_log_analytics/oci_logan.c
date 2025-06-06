@@ -1508,6 +1508,54 @@ static int get_and_pack_oci_fields_from_record(msgpack_packer *packer,
 
 }
 
+void debug_msgpack_map_safely(FILE *fp, msgpack_object map, const char *context) {
+    fprintf(fp, "\n debugging p-messagepack map: [%s] \n", context);
+    
+    if (map.type != MSGPACK_OBJECT_MAP) {
+        return;
+    }
+    
+    fprintf(fp, "map-size: %d \n", map.via.map.size);
+    
+    if (map.via.map.size == 0) {
+        return;
+    }
+    
+    if (map.via.map.ptr == NULL) {
+        return;
+    }
+    for (int i = 0; i < map.via.map.size; i++) {
+        fprintf(fp, "\nentry %d:\n", i);
+        
+        msgpack_object key = map.via.map.ptr[i].key;
+        msgpack_object val = map.via.map.ptr[i].val;
+        
+        fprintf(fp, " key type: %d ", key.type);
+        if (key.type == MSGPACK_OBJECT_STR)
+            fprintf(fp, "key: '%.*s' (len=%u)\n", 
+                    (int)key.via.str.size, key.via.str.ptr, key.via.str.size);
+        fprintf(fp, "  Val type: %d ", val.type);
+        if (val.type == MSGPACK_OBJECT_STR) {
+            int print_len = (val.via.str.size > 200) ? 200 : (int)val.via.str.size;
+            fprintf(fp, "Val: '%.*s%s' (len=%u)\n",
+                    print_len, val.via.str.ptr,
+                    (val.via.str.size > 200) ? "..." : "",
+                    val.via.str.size);
+        } else if (val.type == MSGPACK_OBJECT_POSITIVE_INTEGER) {
+            fprintf(fp, "Val: %llu\n", val.via.u64);
+        } else if (val.type == MSGPACK_OBJECT_NEGATIVE_INTEGER) {
+            fprintf(fp, "Val: %lld\n", val.via.i64);
+        } else if (val.type == MSGPACK_OBJECT_BOOLEAN) {
+            fprintf(fp, "Val: %s\n", val.via.boolean ? "true" : "false");
+        } else {
+            fprintf(fp, "(type %d)\n", val.type);
+        }
+    }
+    
+    fprintf(fp, "=== end Debug ===\n\n");
+    fflush(fp);
+}
+
 static int total_flush(struct flb_event_chunk *event_chunk,
                        struct flb_output_flush *out_flush,
                        struct flb_input_instance *ins, void *out_context,
@@ -1531,14 +1579,18 @@ static int total_flush(struct flb_event_chunk *event_chunk,
     ret =
         flb_log_event_decoder_init(&log_decoder, (char *) event_chunk->data,
                                    event_chunk->size);
-
     if (ret != FLB_EVENT_DECODER_SUCCESS) {
         flb_plg_error(ctx->ins,
                       "Log event decoder initialization error : %d", ret);
         res = FLB_ERROR;
         goto clean_up;
     }
-
+    static int a =  0;
+    char file_name[1024];
+    sprintf(file_name, "/tmp/log_event{%d}.log", a);
+    FILE *fp_log = fopen(file_name, "w");
+    a++;
+    // fprintf(fp_log, "event_chunk.data->[%s]\nevent_chunk.size->[%ld]\n", event_chunk->data, event_chunk->size);
     /* Create temporary msgpack buffer */
     msgpack_sbuffer_init(&mp_sbuf);
     msgpack_packer_init(&mp_pck, &mp_sbuf, msgpack_sbuffer_write);
@@ -1553,6 +1605,7 @@ static int total_flush(struct flb_event_chunk *event_chunk,
            FLB_EVENT_DECODER_SUCCESS) {
         map = *log_event.body;
         map_size = map.via.map.size;
+        debug_msgpack_map_safely(fp_log, map, "current log event");
         if (count < 1) {
             if (ctx->oci_config_in_record == FLB_FALSE) {
                 pack_oci_fields(&mp_pck, ctx);
@@ -1609,6 +1662,11 @@ static int total_flush(struct flb_event_chunk *event_chunk,
     }
 
     out_buf = flb_msgpack_raw_to_json_sds(mp_sbuf.data, mp_sbuf.size);
+    flb_plg_debug(ctx->ins, "out_buf->[%s]", out_buf);
+    // if(fp_log){
+    //         fprintf(fp_log, "buff->[%s]\nbuff_size->[%zu]\n", out_buf,flb_sds_len(out_buf));
+    //         fflush(fp_log);
+    // }
     msgpack_sbuffer_destroy(&mp_sbuf);
     flb_log_event_decoder_destroy(&log_decoder);
 
@@ -1666,6 +1724,10 @@ static struct flb_config_map config_map[] = {
      FLB_CONFIG_MAP_STR, "auth_mode", "config_file",
      0, FLB_TRUE, offsetof(struct flb_oci_logan, auth_mode),
      "Authentication mode : config_file as default or instance_principal"},
+    {
+     FLB_CONFIG_MAP_STR, "domain_suffix", NULL,
+     0, FLB_TRUE, offsetof(struct flb_oci_logan, domain_suffix),
+     "domaine suffix : NULL as default or oci domain"},
     {
      FLB_CONFIG_MAP_STR, "config_file_location", "",
      0, FLB_TRUE, offsetof(struct flb_oci_logan, config_file_location),
