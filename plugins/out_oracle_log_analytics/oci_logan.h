@@ -251,12 +251,14 @@ struct flb_oci_logan
     int oci_config_in_record;
     flb_sds_t uri;
 
+    char *domain_suffix;
     struct flb_upstream *u;
     flb_sds_t proxy;
     char *proxy_host;
     int proxy_port;
 
     // oci_la_* configs
+
     flb_sds_t oci_la_entity_id;
 
     flb_sds_t oci_la_entity_type;
