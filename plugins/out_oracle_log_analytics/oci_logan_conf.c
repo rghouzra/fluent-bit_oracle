@@ -514,9 +514,6 @@ static flb_sds_t construct_oci_host(const char *service, struct flb_oci_logan *c
 
     realm = determine_realm_from_region(region);
     domain_suffix = get_domain_suffix_for_realm(realm);
-    // fprintf(stderr, "construct_oci_host::realm->[%s]\n", realm);
-    // fprintf(stderr, "construct_oci_host::domain_suffix->[%s]\n",
-    //         domain_suffix);
 
 CONSTRUCT_HOST:
     flb_sds_t host = flb_sds_create_size(256);
@@ -525,19 +522,6 @@ CONSTRUCT_HOST:
     }
     flb_sds_snprintf(&host, flb_sds_alloc(host), "%s.%s.oci.%s",
                      service, region, domain_suffix);
-    // static int i = 0;
-
-    // char buffer[1024] = {0};
-    // sprintf(buffer, "construct_oci_host {%d}", i);
-    // FILE *f = fopen(buffer, "w");
-    // if(f){
-    //     fprintf(f, "realm->%s\n", realm);
-    //     fprintf(f, "domain_suffix->%s\n", domain_suffix);
-    //     fprintf(f, "host->%s\n", host);
-    //     fflush(f);
-    // }
-    // i++;
-    // fprintf(stderr, "construct_oci_host::host->[%s]\n", host);
     return host;
 }
 

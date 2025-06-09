@@ -1,0 +1,11 @@
+- in the current implementation the logs are mixed depending on the first log record
+- the solution should fix that also the solution should be optimized so it dosent affect performance, so the best solution for now is before building the entire payload and then finding is larger, we can do an estimation the json size, we can use a factor, since the json expand
+- so the first step is to group logs by log source, each group will be processed in batch that respect size limit(~3.8)
+
+while(more_logs_event) {
+    // sort logs into logical groups
+    // each record  will extract its log source, (group id, source name , entity details), record with same identity, 
+}
+
+// each batch is tronsformed into json independetly
+// 
