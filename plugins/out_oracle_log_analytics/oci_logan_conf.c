@@ -981,7 +981,6 @@ static flb_sds_t sign_request_with_key(struct flb_oci_logan *ctx,
     flb_sds_printf(&string_to_sign, "date: %s\n", date);
     flb_sds_printf(&string_to_sign, "(request-target): %s %s\n",
                    lowercase_method, url_path);
-    // flb_sds_printf(&string_to_sign, "host: %s\n", host);
     flb_sds_printf(&string_to_sign, "content-length: %zu\n",
                    (payload) ? strlen(payload) : 0);
     flb_sds_printf(&string_to_sign, "content-type: application/json\n");
@@ -1512,7 +1511,6 @@ struct flb_oci_logan *flb_oci_logan_conf_create(struct flb_output_instance
         if (ctx->imds.region) {
             ctx->region = flb_sds_create(ctx->imds.region);
         }
-        // still not fixed
     }
     else {
         if (!ctx->config_file_location) {

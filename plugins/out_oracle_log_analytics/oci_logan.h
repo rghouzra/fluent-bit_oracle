@@ -162,6 +162,7 @@
 
 
 #define COUNT_OF_REGION (sizeof(region_mappings) / sizeof(region_mappings[0]) - 1)
+#define MAX_PAYLOAD_SIZE_BYTES (1000000) // just to for testing still to be changed to 3.8mb
 
 #include <fluent-bit/flb_upstream.h>
 #include <fluent-bit/flb_sds.h>
