@@ -555,7 +555,7 @@ flb_sds_t extract_region(const char *response)
         len--;
     }
 
-    char *region = malloc(len + 1);
+    char *region = flb_malloc(len + 1);
     if (!region) {
         return NULL;
     }
@@ -861,7 +861,7 @@ char *extract_public_key_pem(EVP_PKEY *pkey)
     long pem_length = BIO_get_mem_data(bio, &pem_data);
 
 
-    char *public_key_pem = malloc(pem_length + 1);
+    char *public_key_pem = flb_malloc(pem_length + 1);
     if (!public_key_pem) {
         BIO_free(bio);
         return NULL;
@@ -891,7 +891,7 @@ char *extract_private_key_pem(EVP_PKEY *pkey)
     long pem_length = BIO_get_mem_data(bio, &pem_data);
 
 
-    char *private_key_pem = malloc(pem_length + 1);
+    char *private_key_pem = flb_malloc(pem_length + 1);
     if (!private_key_pem) {
         BIO_free(bio);
         return NULL;
