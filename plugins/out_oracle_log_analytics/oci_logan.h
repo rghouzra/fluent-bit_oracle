@@ -162,7 +162,7 @@
 
 
 #define COUNT_OF_REGION (sizeof(region_mappings) / sizeof(region_mappings[0]) - 1)
-#define MAX_PAYLOAD_SIZE_BYTES (1000000) // just to for testing still to be changed to 3.8mb
+#define MAX_PAYLOAD_SIZE_BYTES (3800000) // just to for testing still to be changed to 3.8mb
 
 #include <fluent-bit/flb_upstream.h>
 #include <fluent-bit/flb_sds.h>
@@ -190,7 +190,7 @@
 #include <openssl/x509.h>
 #include <openssl/rsa.h>
 #include <openssl/pem.h>
-
+#include <sys/time.h>
 struct metadata_obj
 {
     flb_sds_t key;

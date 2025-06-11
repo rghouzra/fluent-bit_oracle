@@ -795,23 +795,51 @@ int get_keys_and_certs(struct flb_oci_logan *ctx, struct flb_config *config)
 
 static EVP_PKEY *generate_session_key_pair(struct flb_oci_logan *ctx)
 {
-    EVP_PKEY *pkey = EVP_PKEY_new();
-    BIGNUM *bn = BN_new();
-    // it still to be updated since its deprecated after openssl 3.0
-    RSA *rsa = RSA_new();
-    int rc;
+    #if OPENSSL_VERSION_NUMBER < 0x30000000L
+        EVP_PKEY *pkey = EVP_PKEY_new();
+        BIGNUM *bn = BN_new();
+        RSA *rsa = RSA_new();
+        int rc;
 
-    BN_set_word(bn, RSA_F4);
-    rc = RSA_generate_key_ex(rsa, 2048, bn, NULL);
-    if (rc != 1) {
-        RSA_free(rsa);
+        BN_set_word(bn, RSA_F4);
+        rc = RSA_generate_key_ex(rsa, 2048, bn, NULL);
+        if (rc != 1) {
+            RSA_free(rsa);
+            BN_free(bn);
+            return NULL;
+        }
+
+        EVP_PKEY_assign_RSA(pkey, rsa);
         BN_free(bn);
-        return NULL;
-    }
-
-    EVP_PKEY_assign_RSA(pkey, rsa);
-    BN_free(bn);
-    return pkey;
+        return pkey;
+    #else
+        EVP_PKEY *pkey = NULL;
+        EVP_PKEY_CTX *pkey_ctx = NULL;
+        
+        pkey_ctx = EVP_PKEY_CTX_new_id(EVP_PKEY_RSA, NULL);
+        if (!pkey_ctx) {
+            return NULL;
+        }
+        
+        if (EVP_PKEY_keygen_init(pkey_ctx) <= 0) {
+            EVP_PKEY_CTX_free(pkey_ctx);
+            return NULL;
+        }
+        
+        if (EVP_PKEY_CTX_set_rsa_keygen_bits(pkey_ctx, 2048) <= 0) {
+            EVP_PKEY_CTX_free(pkey_ctx);
+            return NULL;
+        }
+        
+        if (EVP_PKEY_keygen(pkey_ctx, &pkey) <= 0) {
+            EVP_PKEY_CTX_free(pkey_ctx);
+            return NULL;
+        }
+        
+        EVP_PKEY_CTX_free(pkey_ctx);
+        
+        return pkey;
+    #endif
 }
 
 

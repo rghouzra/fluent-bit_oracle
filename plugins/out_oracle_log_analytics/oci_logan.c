@@ -867,7 +867,7 @@ static char *calculate_content_sha256_b64(const char *content, size_t len)
     }
 
     if (flb_base64_encode
-        (b64_hash, b64_len, &b64_len, hash, SHA256_DIGEST_LENGTH) != 0) {
+        ((unsigned char *)b64_hash, b64_len, &b64_len, hash, SHA256_DIGEST_LENGTH) != 0) {
         flb_free(b64_hash);
         return NULL;
     }
@@ -1539,7 +1539,6 @@ static int send_batch_with_count(struct flb_oci_logan *ctx,
     }
     
     flb_plg_debug(ctx->ins, "startc batch %d: records %d-%d (%d total)",   batch_counter - 1, start_record, start_record + record_count - 1, record_count);
-    
     msgpack_sbuffer_init(&mp_sbuf);
     msgpack_packer_init(&mp_pck, &mp_sbuf, msgpack_sbuffer_write);
     
@@ -1598,6 +1597,7 @@ static int send_batch_with_count(struct flb_oci_logan *ctx,
     if (debug_fp) {
         fprintf(debug_fp, "msg_process: possition at record %d, \n", current_record);
         fprintf(debug_fp, "msg_process: extract %d messages\n", record_count);
+        fflush(debug_fp);
     }
     
     int packed_records = 0;
@@ -1642,6 +1642,7 @@ static int send_batch_with_count(struct flb_oci_logan *ctx,
                 }
                 fprintf(debug_fp, "\n");
             }
+            fflush(debug_fp);
         }
 
         if (log >= 0) {
@@ -1661,14 +1662,16 @@ static int send_batch_with_count(struct flb_oci_logan *ctx,
         
         if (packed_records % 10 == 0 && debug_fp){
             fprintf(debug_fp, "progress:processed %d/%d of rrecords\n", packed_records,record_count);
+            fflush(debug_fp);
         }
     }
 
     flb_log_event_decoder_destroy(&log_decoder);
 
     if (debug_fp) {
-        fprintf(debug_fp, "\process: extraction is done  \n");
+        fprintf(debug_fp, "process: extraction is done  \n");
         fprintf(debug_fp, "process: success packed %d messages\n", packed_records);
+        fflush(debug_fp);
     }
 
     out_buf = flb_msgpack_raw_to_json_sds(mp_sbuf.data, mp_sbuf.size);
@@ -1698,6 +1701,7 @@ static int send_batch_with_count(struct flb_oci_logan *ctx,
         fprintf(debug_fp, "\nresults:\n");
         fprintf(debug_fp, "records processed-> %d/%d\n", packed_records, record_count);
         fprintf(debug_fp, "json size: %zu bytes\n", json_size);
+        fflush(debug_fp);
         fclose(debug_fp);
     }
 
