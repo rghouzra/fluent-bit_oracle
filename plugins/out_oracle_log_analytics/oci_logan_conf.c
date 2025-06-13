@@ -562,7 +562,7 @@ flb_sds_t extract_region(const char *response)
 
     strncpy(region, body_start, len);
     region[len] = '\0';
-    flb_sds_t lregion = flb_sds_create(long_region_name(region));       // should be freed later
+    flb_sds_t lregion = flb_sds_create(long_region_name(region));
     free(region);
     return lregion;
 }
@@ -633,7 +633,7 @@ flb_sds_t calculate_certificate_fingerprint(struct flb_oci_logan *ctx,
         *(p - 1) = '\0';
     }
 
-    fingerprint = flb_sds_create(hex_fingerprint);      // should be freed later
+    fingerprint = flb_sds_create(hex_fingerprint);
 
     for (int i = 0; i < flb_sds_len(fingerprint); i++) {
         if (islower(fingerprint[i])) {
@@ -695,6 +695,7 @@ bool extract_tenancy_ocid(struct flb_oci_logan *ctx, const char *cert_pem)
     return 1;
 }
 
+// retrieves region, certificates, and keys from IMDS
 int get_keys_and_certs(struct flb_oci_logan *ctx, struct flb_config *config)
 {
     ctx->u =
@@ -709,6 +710,7 @@ int get_keys_and_certs(struct flb_oci_logan *ctx, struct flb_config *config)
         flb_plg_error(ctx->ins, "failed to get upstream connection");
         return 0;
     }
+
     flb_sds_t region_resp =
         make_imds_request(ctx, u_conn,
                           ORACLE_IMDS_BASE_URL ORACLE_IMDS_REGION_PATH);
@@ -754,10 +756,13 @@ int get_keys_and_certs(struct flb_oci_logan *ctx, struct flb_config *config)
         (pem_end - pem_start) + strlen("-----END RSA PRIVATE KEY-----") + 1;
     ctx->imds.leaf_key = flb_sds_create_len(pem_start, pem_len);        // should be freed later
 
+    // extract tenancy ocid from leaf certificate
     if (!extract_tenancy_ocid(ctx, clean_cert_resp)) {
         flb_plg_error(ctx->ins, "extract_tenancy_ocid failed");
         goto error;
     }
+
+    // calculate certificate fingerprint for signing
     ctx->imds.fingerprint =
         calculate_certificate_fingerprint(ctx, clean_cert_resp);
     if (!ctx->imds.fingerprint) {
@@ -767,6 +772,7 @@ int get_keys_and_certs(struct flb_oci_logan *ctx, struct flb_config *config)
     flb_upstream_conn_release(u_conn);
     flb_upstream_destroy(ctx->u);
     ctx->u = NULL;
+
     return 1;
 
   error:
@@ -782,6 +788,10 @@ int get_keys_and_certs(struct flb_oci_logan *ctx, struct flb_config *config)
     if (int_cert_resp) {
         flb_sds_destroy(int_cert_resp);
     }
+    if (ctx->imds.fingerprint) {
+        flb_sds_destroy(ctx->imds.fingerprint);
+    }
+    ctx->imds.fingerprint = NULL;
     ctx->imds.intermediate_cert = NULL;
     ctx->imds.leaf_cert = NULL;
     ctx->imds.leaf_key = NULL;
@@ -789,29 +799,57 @@ int get_keys_and_certs(struct flb_oci_logan *ctx, struct flb_config *config)
     flb_upstream_conn_release(u_conn);
     flb_upstream_destroy(ctx->u);
     ctx->u = NULL;
-    flb_plg_error(ctx->ins, "error: bloacl");
     return 0;
 }
 
+// Generates RSA key pair for session based authentication
 static EVP_PKEY *generate_session_key_pair(struct flb_oci_logan *ctx)
 {
-    EVP_PKEY *pkey = EVP_PKEY_new();
-    BIGNUM *bn = BN_new();
-    // it still to be updated since its deprecated after openssl 3.0
-    RSA *rsa = RSA_new();
-    int rc;
+    #if OPENSSL_VERSION_NUMBER < 0x30000000L
+        EVP_PKEY *pkey = EVP_PKEY_new();
+        BIGNUM *bn = BN_new();
+        RSA *rsa = RSA_new();
+        int rc;
 
-    BN_set_word(bn, RSA_F4);
-    rc = RSA_generate_key_ex(rsa, 2048, bn, NULL);
-    if (rc != 1) {
-        RSA_free(rsa);
+        BN_set_word(bn, RSA_F4);
+        rc = RSA_generate_key_ex(rsa, 2048, bn, NULL);
+        if (rc != 1) {
+            RSA_free(rsa);
+            BN_free(bn);
+            return NULL;
+        }
+
+        EVP_PKEY_assign_RSA(pkey, rsa);
         BN_free(bn);
-        return NULL;
-    }
-
-    EVP_PKEY_assign_RSA(pkey, rsa);
-    BN_free(bn);
-    return pkey;
+        return pkey;
+    #else
+        EVP_PKEY *pkey = NULL;
+        EVP_PKEY_CTX *pkey_ctx = NULL;
+        
+        pkey_ctx = EVP_PKEY_CTX_new_id(EVP_PKEY_RSA, NULL);
+        if (!pkey_ctx) {
+            return NULL;
+        }
+        
+        if (EVP_PKEY_keygen_init(pkey_ctx) <= 0) {
+            EVP_PKEY_CTX_free(pkey_ctx);
+            return NULL;
+        }
+        
+        if (EVP_PKEY_CTX_set_rsa_keygen_bits(pkey_ctx, 2048) <= 0) {
+            EVP_PKEY_CTX_free(pkey_ctx);
+            return NULL;
+        }
+        
+        if (EVP_PKEY_keygen(pkey_ctx, &pkey) <= 0) {
+            EVP_PKEY_CTX_free(pkey_ctx);
+            return NULL;
+        }
+        
+        EVP_PKEY_CTX_free(pkey_ctx);
+        
+        return pkey;
+    #endif
 }
 
 
@@ -910,6 +948,7 @@ static flb_sds_t sanitize_certificate(const char *cert_str)
     return clean;
 }
 
+// Creates federation payload for OCI security token
 flb_sds_t create_federation_payload(struct flb_oci_logan *ctx)
 {
     flb_sds_t payload = NULL;
@@ -940,10 +979,12 @@ flb_sds_t create_federation_payload(struct flb_oci_logan *ctx)
     }
 
 
-  cleanup:
-    // flb_sds_destroy(leaf_cert);
-    // flb_sds_destroy(session_pubkey);
-    // flb_sds_destroy(intermediate_certs);
+cleanup:
+    flb_free(ctx->imds.leaf_cert);
+    // flb_free(ctx->imds.intermediate_cert);
+    flb_sds_destroy(leaf_cert);
+    flb_sds_destroy(session_pubkey);
+    flb_sds_destroy(intermediate_certs);
     return payload;
 }
 
@@ -1095,6 +1136,9 @@ static flb_sds_t sign_request_with_key(struct flb_oci_logan *ctx,
     }
     if (lowercase_method) {
         flb_sds_destroy(lowercase_method);
+    }
+    if (ctx->imds.tenancy_ocid) {
+        flb_sds_destroy(ctx->imds.tenancy_ocid);
     }
     flb_plg_debug(ctx->ins, "auth header: %s", auth_header);
 
@@ -1280,6 +1324,7 @@ static int decode_jwt_and_set_expires(struct flb_oci_logan *ctx)
     return 0;
 }
 
+// signs and sends federation request to OCI authentication endpoint
 flb_sds_t sign_and_send_federation_request(struct flb_oci_logan *ctx,
                                            flb_sds_t payload)
 {
@@ -1397,17 +1442,8 @@ flb_sds_t sign_and_send_federation_request(struct flb_oci_logan *ctx,
         goto cleanup;
     }
 
-    flb_plg_debug(ctx->ins, "status_code -> %d\nurl -> %s\n header -> %s",
-                  client->resp.status, client->uri, client->resp.data);
-    resp =
-        flb_sds_create_len(client->resp.payload, client->resp.payload_size);
-    flb_plg_debug(ctx->ins, "resp->%s", resp);
-    if (parse_federation_response(resp, &ctx->security_token) < 0) {
-        flb_plg_error(ctx->ins, "failed to parse federation response");
-        return NULL;
-    }
-    flb_plg_debug(ctx->ins, "ctx->security_token-> %s",
-                  ctx->security_token.token);
+    // flb_plg_debug(ctx->ins, "status_code -> %d\nurl -> %s\n header -> %s",
+    //               client->resp.status, client->uri, client->resp.data);
 
     if (client->resp.payload && client->resp.payload_size > 0) {
         resp =
@@ -1430,6 +1466,7 @@ flb_sds_t sign_and_send_federation_request(struct flb_oci_logan *ctx,
     }
     flb_sds_destroy(date_header);
     flb_sds_destroy(url_path);
+    flb_free(b64_hash);
     flb_free(host);
     flb_http_client_destroy(client);
     flb_upstream_conn_release(u_conn);
@@ -1469,42 +1506,43 @@ struct flb_oci_logan *flb_oci_logan_conf_create(struct flb_output_instance
         return NULL;
     }
 
-    if (strcmp(ctx->auth_mode, "instance_principal") == 0) {
+    if (strcmp(ctx->auth_type, "instance_principal") == 0) {
         flb_plg_info(ctx->ins, "Using instance principal authentication");
 
         if (get_keys_and_certs(ctx, config) != 1) {
-            flb_plg_error(ctx->ins, "get_keys_and_certs_failed");
+            flb_plg_error(ctx->ins, "failed to get keys from imds");
             flb_oci_logan_conf_destroy(ctx);
             return NULL;
         }
 
         ctx->session_key_pair = generate_session_key_pair(ctx);
         if (!ctx->session_key_pair) {
+            flb_plg_error(ctx->ins, "failed to generate session keypair");
             flb_oci_logan_conf_destroy(ctx);
             return NULL;
         }
-
+        
         ctx->imds.session_pubkey = extract_public_key_pem(ctx->session_key_pair);       // should be freed later
         ctx->imds.session_privkey = extract_private_key_pem(ctx->session_key_pair);     // should be freed later
-
+        
         if (!ctx->imds.session_pubkey || !ctx->imds.session_privkey) {
             flb_oci_logan_conf_destroy(ctx);
             return NULL;
         }
-
+        
         flb_sds_t json_payload = create_federation_payload(ctx);        // should be freed later
         if (!json_payload) {
             flb_oci_logan_conf_destroy(ctx);
             return NULL;
         }
-
+        
         flb_sds_t response = sign_and_send_federation_request(ctx, json_payload);       // should be freed later
-        flb_sds_destroy(json_payload);
-
         if (!response) {
+            flb_plg_error(ctx->ins, "failed to get security token from federation endpoint");
             flb_oci_logan_conf_destroy(ctx);
             return NULL;
         }
+        flb_sds_destroy(json_payload);
         flb_plg_debug(ctx->ins, "federation token -> %s",
                       ctx->security_token.token);
         flb_sds_destroy(response);
@@ -1512,7 +1550,6 @@ struct flb_oci_logan *flb_oci_logan_conf_create(struct flb_output_instance
         if (ctx->imds.region) {
             ctx->region = flb_sds_create(ctx->imds.region);
         }
-        // still not fixed
     }
     else {
         if (!ctx->config_file_location) {
@@ -1579,9 +1616,11 @@ struct flb_oci_logan *flb_oci_logan_conf_create(struct flb_output_instance
             flb_oci_logan_conf_destroy(ctx);
             return NULL;
         }
-        // host = flb_sds_create_size(512);
-        // flb_sds_snprintf(&host, flb_sds_alloc(host), "loganalytics.%s.oci.oraclecloud.com", ctx->region);
-        host = construct_oci_host("loganalytics", ctx); // should be freed later
+        host = construct_oci_host("loganalytics", ctx);
+        if(!host) {
+            flb_plg_error(ctx->ins, "failed to construct oci host");
+            return NULL;
+        }
     }
     flb_plg_debug(ctx->ins, "host -> %s", host);
     if (!ctx->uri) {

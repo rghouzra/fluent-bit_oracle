@@ -198,12 +198,6 @@ struct metadata_obj
 
 };
 
-typedef struct
-{
-    const char *region;
-    const char *realm;
-} region_realm_mapping_t;
-
 struct flb_oci_error_response
 {
     flb_sds_t code;
@@ -230,6 +224,12 @@ struct oci_security_token
     time_t expires_at;
     flb_sds_t session_privkey;
 };
+
+typedef struct
+{
+    const char *region;
+    const char *realm;
+} region_realm_mapping_t;
 
 typedef struct
 {
@@ -292,6 +292,6 @@ struct flb_oci_logan
     struct flb_oracle_imds imds;
     EVP_PKEY *session_key_pair;
     struct oci_security_token security_token;
-    char *auth_mode;
+    char *auth_type;
 };
 #endif

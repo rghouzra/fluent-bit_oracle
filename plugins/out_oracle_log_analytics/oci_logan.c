@@ -657,27 +657,7 @@ static flb_sds_t compose_uri(struct flb_oci_logan *ctx,
     return full_uri;
 }
 
-static flb_sds_t generate_request_id_safe(void)
-{
-    flb_sds_t request_id = flb_sds_create_size(37);
-    if (!request_id) {
-        return NULL;
-    }
-    struct timeval tv;
-    gettimeofday(&tv, NULL);
-    srand(tv.tv_usec);
-
-    // test
-    flb_sds_printf(&request_id, "%08X-%04X-%04X-%04X-%012X",
-                   (unsigned int) (tv.tv_sec & 0xFFFFFFFF),
-                   (unsigned int) (rand() & 0xFFFF),
-                   (unsigned int) (rand() & 0xFFFF),
-                   (unsigned int) (rand() & 0xFFFF),
-                   (unsigned int) (tv.tv_usec & 0xFFFFFFFF));
-
-    return request_id;
-}
-
+// Checks if the current security token needs refresh(expires within 5min)
 static int token_needs_refresh(struct flb_oci_logan *ctx)
 {
     time_t now = time(NULL);
@@ -685,12 +665,12 @@ static int token_needs_refresh(struct flb_oci_logan *ctx)
     return (ctx->security_token.expires_at - now) < 300;
 }
 
+// Refreshes the security token if it's close to expiration
 static int refresh_security_token_if_needed(struct flb_oci_logan *ctx)
 {
     if (!token_needs_refresh(ctx)) {
         return 0;
     }
-
 
     flb_sds_t json_payload = create_federation_payload(ctx);
     if (!json_payload) {
@@ -726,9 +706,7 @@ static flb_sds_t sign_oci_request_with_security_token_for_logging(struct
                                                                   const char
                                                                   *host,
                                                                   const char
-                                                                  *content_sha256,
-                                                                  flb_sds_t
-                                                                  request_id)
+                                                                  *content_sha256)
 {
     flb_sds_t string_to_sign = NULL;
     flb_sds_t signature_header = NULL;
@@ -867,7 +845,7 @@ static char *calculate_content_sha256_b64(const char *content, size_t len)
     }
 
     if (flb_base64_encode
-        (b64_hash, b64_len, &b64_len, hash, SHA256_DIGEST_LENGTH) != 0) {
+        ((unsigned char *)b64_hash, b64_len, &b64_len, hash, SHA256_DIGEST_LENGTH) != 0) {
         flb_free(b64_hash);
         return NULL;
     }
@@ -875,6 +853,7 @@ static char *calculate_content_sha256_b64(const char *content, size_t len)
 
     return b64_hash;
 }
+
 
 struct flb_http_client *create_oci_signed_request_for_logging(struct
                                                               flb_oci_logan
@@ -895,7 +874,6 @@ struct flb_http_client *create_oci_signed_request_for_logging(struct
 {
     struct flb_http_client *client = NULL;
     flb_sds_t date_header = NULL;
-    flb_sds_t request_id = NULL;
     flb_sds_t signature_header = NULL;
     char *content_sha256 = NULL;
     char date_buf[128];
@@ -930,11 +908,6 @@ struct flb_http_client *create_oci_signed_request_for_logging(struct
     date_header = flb_sds_create_len(date_buf, date_len);
     if (!date_header) {
         return NULL;
-    }
-
-    request_id = generate_request_id_safe();
-    if (!request_id) {
-        goto cleanup;
     }
 
     if (payload && payload_size > 0) {
@@ -976,8 +949,6 @@ struct flb_http_client *create_oci_signed_request_for_logging(struct
 
     flb_http_add_header(client, "x-content-sha256", 16, content_sha256,
                         strlen(content_sha256));
-    flb_http_add_header(client, "opc-request-id", 14, request_id,
-                        flb_sds_len(request_id));
 
     const char *user_agent = "fluent-bit-oci-plugin/1.0";
     flb_http_add_header(client, "User-Agent", 10, user_agent,
@@ -988,8 +959,7 @@ struct flb_http_client *create_oci_signed_request_for_logging(struct
                                                          uri_path, payload,
                                                          payload_size,
                                                          date_header, host,
-                                                         content_sha256,
-                                                         request_id);
+                                                         content_sha256 );
     if (!signature_header) {
         goto cleanup;
     }
@@ -997,7 +967,6 @@ struct flb_http_client *create_oci_signed_request_for_logging(struct
     flb_http_add_header(client, "Authorization", 13, signature_header,
                         flb_sds_len(signature_header));
     flb_sds_destroy(date_header);
-    flb_sds_destroy(request_id);
     flb_sds_destroy(signature_header);
     flb_free(content_sha256);
 
@@ -1008,8 +977,6 @@ struct flb_http_client *create_oci_signed_request_for_logging(struct
         flb_http_client_destroy(client);
     if (date_header)
         flb_sds_destroy(date_header);
-    if (request_id)
-        flb_sds_destroy(request_id);
     if (signature_header)
         flb_sds_destroy(signature_header);
     if (content_sha256)
@@ -1017,8 +984,6 @@ struct flb_http_client *create_oci_signed_request_for_logging(struct
 
     return NULL;
 }
-
-
 
 static int flush_to_endpoint(struct flb_oci_logan *ctx,
                              flb_sds_t payload,
@@ -1047,7 +1012,7 @@ static int flush_to_endpoint(struct flb_oci_logan *ctx,
         return FLB_ERROR;
     }
 
-    if (strcmp(ctx->auth_mode, "instance_principal") == 0) {
+    if (strcmp(ctx->auth_type, "instance_principal") == 0) {
         c = create_oci_signed_request_for_logging(ctx, u_conn, "POST",
                                                   full_uri,
                                                   ctx->ins->host.name,
@@ -1055,6 +1020,7 @@ static int flush_to_endpoint(struct flb_oci_logan *ctx,
                                                   payload,
                                                   flb_sds_len(payload));
         if (!c) {
+            out_ret = FLB_RETRY;
             goto error_label;
         }
     }
@@ -1128,7 +1094,7 @@ static int flush_to_endpoint(struct flb_oci_logan *ctx,
         goto error_label;
     }
 
-  error_label:
+error_label:
     if (full_uri) {
         flb_sds_destroy(full_uri);
     }
@@ -1662,8 +1628,8 @@ static int cb_oci_logan_exit(void *data, struct flb_config *config)
 /* Configuration properties map */
 static struct flb_config_map config_map[] = {
     {
-     FLB_CONFIG_MAP_STR, "auth_mode", "config_file",
-     0, FLB_TRUE, offsetof(struct flb_oci_logan, auth_mode),
+     FLB_CONFIG_MAP_STR, "auth_type", "config_file",
+     0, FLB_TRUE, offsetof(struct flb_oci_logan, auth_type),
      "Authentication mode : config_file as default or instance_principal"},
     {
      FLB_CONFIG_MAP_STR, "domain_suffix", NULL,
