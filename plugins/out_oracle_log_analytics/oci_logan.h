@@ -287,8 +287,7 @@ struct flb_oci_logan
     flb_sds_t private_key;
     struct flb_output_instance *ins;
 
-    // temorary solution for region
-    // instance prinicip auth
+    // instance prinicipal auth
     struct flb_oracle_imds imds;
     EVP_PKEY *session_key_pair;
     struct oci_security_token security_token;

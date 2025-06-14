@@ -694,8 +694,6 @@ static flb_sds_t sign_oci_request_with_security_token_for_logging(struct
                                                                   flb_oci_logan
                                                                   *ctx,
                                                                   const char
-                                                                  *method,
-                                                                  const char
                                                                   *uri_path,
                                                                   const char
                                                                   *payload,
@@ -710,28 +708,19 @@ static flb_sds_t sign_oci_request_with_security_token_for_logging(struct
 {
     flb_sds_t string_to_sign = NULL;
     flb_sds_t signature_header = NULL;
-    flb_sds_t lowercase_method = NULL;
+    flb_sds_t lowercase_method = flb_sds_create("post");
     unsigned char *signature = NULL;
     unsigned char *b64_out = NULL;
     size_t sig_len = 0;
     BIO *bio = NULL;
     EVP_PKEY *pkey = NULL;
     EVP_MD_CTX *md_ctx = NULL;
+    
 
     string_to_sign = flb_sds_create_size(2048);
     if (!string_to_sign) {
         return NULL;
     }
-
-    lowercase_method = flb_sds_create(method);
-    if (!lowercase_method) {
-        goto cleanup;
-    }
-
-    for (int i = 0; i < flb_sds_len(lowercase_method); i++) {
-        lowercase_method[i] = tolower(method[i]);
-    }
-
     flb_sds_printf(&string_to_sign, "date: %s\n", date);
     flb_sds_printf(&string_to_sign, "(request-target): %s %s\n",
                    lowercase_method, uri_path);
@@ -862,15 +851,14 @@ struct flb_http_client *create_oci_signed_request_for_logging(struct
                                                               flb_connection
                                                               *u_conn,
                                                               const char
-                                                              *method,
-                                                              const char
                                                               *uri_path,
                                                               const char
                                                               *host, int port,
                                                               const char
                                                               *payload,
                                                               size_t
-                                                              payload_size)
+                                                              payload_size,
+                                                              bool *should_retry)
 {
     struct flb_http_client *client = NULL;
     flb_sds_t date_header = NULL;
@@ -883,6 +871,7 @@ struct flb_http_client *create_oci_signed_request_for_logging(struct
 
     if (refresh_security_token_if_needed(ctx) < 0) {
         flb_plg_error(ctx->ins, "refresh_security_token_if_needed failed ");
+        *should_retry = 1;
         return NULL;
     }
 
@@ -921,18 +910,7 @@ struct flb_http_client *create_oci_signed_request_for_logging(struct
         goto cleanup;
     }
 
-    int http_method = FLB_HTTP_GET;
-    if (strcmp(method, "POST") == 0) {
-        http_method = FLB_HTTP_POST;
-    }
-    else if (strcmp(method, "PUT") == 0) {
-        http_method = FLB_HTTP_PUT;
-    }
-    else if (strcmp(method, "DELETE") == 0) {
-        http_method = FLB_HTTP_DELETE;
-    }
-
-    client = flb_http_client(u_conn, http_method, uri_path,
+    client = flb_http_client(u_conn, FLB_HTTP_POST, uri_path,
                              payload, payload_size, host, port, NULL, 0);
     if (!client) {
         goto cleanup;
@@ -955,7 +933,7 @@ struct flb_http_client *create_oci_signed_request_for_logging(struct
                         strlen(user_agent));
 
     signature_header =
-        sign_oci_request_with_security_token_for_logging(ctx, method,
+        sign_oci_request_with_security_token_for_logging(ctx,
                                                          uri_path, payload,
                                                          payload_size,
                                                          date_header, host,
@@ -1011,16 +989,17 @@ static int flush_to_endpoint(struct flb_oci_logan *ctx,
         flb_sds_destroy(full_uri);
         return FLB_ERROR;
     }
-
+    bool should_retry = 0;
     if (strcmp(ctx->auth_type, "instance_principal") == 0) {
-        c = create_oci_signed_request_for_logging(ctx, u_conn, "POST",
+        c = create_oci_signed_request_for_logging(ctx, u_conn,
                                                   full_uri,
                                                   ctx->ins->host.name,
                                                   ctx->ins->host.port,
                                                   payload,
-                                                  flb_sds_len(payload));
+                                                  flb_sds_len(payload), &should_retry);
         if (!c) {
-            out_ret = FLB_RETRY;
+            flb_plg_error(ctx->ins, "failed to create instance principal client for logging");
+            out_ret = should_retry * FLB_RETRY;
             goto error_label;
         }
     }
