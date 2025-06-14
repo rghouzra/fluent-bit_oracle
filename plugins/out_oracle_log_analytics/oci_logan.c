@@ -39,8 +39,7 @@
 #include "oci_logan.h"
 
 
-static int check_config_from_record(msgpack_object key,
-                                   char *name, int len)
+static int check_config_from_record(msgpack_object key, char *name, int len)
 {
     if (key.type != MSGPACK_OBJECT_STR) {
         return FLB_FALSE;
@@ -59,28 +58,29 @@ static int check_config_from_record(msgpack_object key,
  * algorithm="rsa-sha256",headers="(request-target) date x-content-sha256 content-type content-length",
  * signature="signature"
  */
-static flb_sds_t create_authorization_header_content(struct flb_oci_logan *ctx,
+static flb_sds_t create_authorization_header_content(struct flb_oci_logan
+                                                     *ctx,
                                                      flb_sds_t signature)
 {
     flb_sds_t content;
 
     content = flb_sds_create_size(512);
     flb_sds_cat_safe(&content, FLB_OCI_SIGN_SIGNATURE_VERSION,
-                           sizeof(FLB_OCI_SIGN_SIGNATURE_VERSION) - 1);
+                     sizeof(FLB_OCI_SIGN_SIGNATURE_VERSION) - 1);
     flb_sds_cat_safe(&content, ",", 1);
     flb_sds_cat_safe(&content, FLB_OCI_SIGN_KEYID,
-                           sizeof(FLB_OCI_SIGN_KEYID) - 1);
+                     sizeof(FLB_OCI_SIGN_KEYID) - 1);
     flb_sds_cat_safe(&content, "=\"", 2);
     flb_sds_cat_safe(&content, ctx->key_id, flb_sds_len(ctx->key_id));
     flb_sds_cat_safe(&content, "\",", 2);
     flb_sds_cat_safe(&content, FLB_OCI_SIGN_ALGORITHM,
-                           sizeof(FLB_OCI_SIGN_ALGORITHM) - 1);
+                     sizeof(FLB_OCI_SIGN_ALGORITHM) - 1);
     flb_sds_cat_safe(&content, ",", 1);
     flb_sds_cat_safe(&content, FLB_OCI_SIGN_HEADERS,
-                           sizeof(FLB_OCI_SIGN_HEADERS) - 1);
+                     sizeof(FLB_OCI_SIGN_HEADERS) - 1);
     flb_sds_cat_safe(&content, ",", 1);
     flb_sds_cat_safe(&content, FLB_OCI_SIGN_SIGNATURE,
-                           sizeof(FLB_OCI_SIGN_SIGNATURE) - 1);
+                     sizeof(FLB_OCI_SIGN_SIGNATURE) - 1);
     flb_sds_cat_safe(&content, "=\"", 2);
     flb_sds_cat_safe(&content, signature, flb_sds_len(signature));
     flb_sds_cat_safe(&content, "\"", 1);
@@ -99,22 +99,22 @@ static flb_sds_t create_base64_sha256_signature(struct flb_oci_logan *ctx,
     size_t sig_len = sizeof(sig);
 
     ret = flb_hash_simple(FLB_HASH_SHA256,
-                          (unsigned char*) signing_string,
+                          (unsigned char *) signing_string,
                           flb_sds_len(signing_string),
                           sha256_buf, sizeof(sha256_buf));
 
-    if(ret != FLB_CRYPTO_SUCCESS) {
+    if (ret != FLB_CRYPTO_SUCCESS) {
         flb_plg_error(ctx->ins, "error generating hash buffer");
         return NULL;
     }
 
-    ret =   flb_crypto_sign_simple(FLB_CRYPTO_PRIVATE_KEY,
-                                   FLB_CRYPTO_PADDING_PKCS1,
-                                   FLB_HASH_SHA256,
-                                   (unsigned char *) ctx->private_key,
-                                   flb_sds_len(ctx->private_key),
-                                   sha256_buf, sizeof(sha256_buf),
-                                   sig, &sig_len);
+    ret = flb_crypto_sign_simple(FLB_CRYPTO_PRIVATE_KEY,
+                                 FLB_CRYPTO_PADDING_PKCS1,
+                                 FLB_HASH_SHA256,
+                                 (unsigned char *) ctx->private_key,
+                                 flb_sds_len(ctx->private_key),
+                                 sha256_buf, sizeof(sha256_buf),
+                                 sig, &sig_len);
 
 
     if (ret != FLB_CRYPTO_SUCCESS) {
@@ -130,8 +130,8 @@ static flb_sds_t create_base64_sha256_signature(struct flb_oci_logan *ctx,
 
     /* base 64 encode */
     len = flb_sds_alloc(signature) - 1;
-    flb_base64_encode((unsigned char*) signature, len, &outlen, sig,
-                          sizeof(sig));
+    flb_base64_encode((unsigned char *) signature, len, &outlen, sig,
+                      sizeof(sig));
     signature[outlen] = '\0';
     flb_sds_len_set(signature, outlen);
 
@@ -171,7 +171,8 @@ static flb_sds_t get_date(void)
 }
 
 static flb_sds_t add_header_and_signing(struct flb_http_client *c,
-                                        flb_sds_t signing_str, const char *header, int headersize,
+                                        flb_sds_t signing_str,
+                                        const char *header, int headersize,
                                         const char *val, int val_size)
 {
     if (!signing_str) {
@@ -189,7 +190,8 @@ static flb_sds_t add_header_and_signing(struct flb_http_client *c,
 }
 
 static int build_headers(struct flb_http_client *c, struct flb_oci_logan *ctx,
-                         flb_sds_t json, flb_sds_t hostname, int port, flb_sds_t uri)
+                         flb_sds_t json, flb_sds_t hostname, int port,
+                         flb_sds_t uri)
 {
     int ret = -1;
     flb_sds_t tmp_sds = NULL;
@@ -224,10 +226,9 @@ static int build_headers(struct flb_http_client *c, struct flb_oci_logan *ctx,
         goto error_label;
     }
     flb_sds_cat_safe(&signing_str, FLB_OCI_HEADER_REQUEST_TARGET,
-                               sizeof(FLB_OCI_HEADER_REQUEST_TARGET) - 1);
+                     sizeof(FLB_OCI_HEADER_REQUEST_TARGET) - 1);
     flb_sds_cat_safe(&signing_str, ": post ", sizeof(": post ") - 1);
-    flb_sds_cat_safe(&signing_str, encoded_uri,
-                               flb_sds_len(encoded_uri));
+    flb_sds_cat_safe(&signing_str, encoded_uri, flb_sds_len(encoded_uri));
 
     /* Add Host to Header */
     if (((c->flags & FLB_IO_TLS) && c->port == 443)
@@ -260,7 +261,8 @@ static int build_headers(struct flb_http_client *c, struct flb_oci_logan *ctx,
         goto error_label;
     }
     signing_str = add_header_and_signing(c, signing_str, FLB_OCI_HEADER_DATE,
-                                         sizeof(FLB_OCI_HEADER_DATE) - 1, rfc1123date,
+                                         sizeof(FLB_OCI_HEADER_DATE) - 1,
+                                         rfc1123date,
                                          flb_sds_len(rfc1123date));
     if (!signing_str) {
         flb_plg_error(ctx->ins, "cannot compose signing string");
@@ -269,12 +271,12 @@ static int build_headers(struct flb_http_client *c, struct flb_oci_logan *ctx,
 
     /* Add x-content-sha256 Header */
     ret = flb_hash_simple(FLB_HASH_SHA256,
-                          (unsigned char*) json,
-                          flb_sds_len(json),
-                          sha256_buf, sizeof(sha256_buf));
+                          (unsigned char *) json,
+                          flb_sds_len(json), sha256_buf, sizeof(sha256_buf));
 
     if (ret != FLB_CRYPTO_SUCCESS) {
-        flb_plg_error(ctx->ins, "error forming hash buffer for x-content-sha256 Header");
+        flb_plg_error(ctx->ins,
+                      "error forming hash buffer for x-content-sha256 Header");
         goto error_label;
     }
 
@@ -284,7 +286,7 @@ static int build_headers(struct flb_http_client *c, struct flb_oci_logan *ctx,
         goto error_label;
     }
 
-    flb_base64_encode((unsigned char*) tmp_sds, flb_sds_len(tmp_sds) - 1,
+    flb_base64_encode((unsigned char *) tmp_sds, flb_sds_len(tmp_sds) - 1,
                       &tmp_len, sha256_buf, sizeof(sha256_buf));
 
     tmp_sds[tmp_len] = '\0';
@@ -292,8 +294,9 @@ static int build_headers(struct flb_http_client *c, struct flb_oci_logan *ctx,
 
     signing_str = add_header_and_signing(c, signing_str,
                                          FLB_OCI_HEADER_X_CONTENT_SHA256,
-                                         sizeof(FLB_OCI_HEADER_X_CONTENT_SHA256) - 1, tmp_sds,
-                                         flb_sds_len(tmp_sds));
+                                         sizeof
+                                         (FLB_OCI_HEADER_X_CONTENT_SHA256) -
+                                         1, tmp_sds, flb_sds_len(tmp_sds));
     if (!signing_str) {
         flb_plg_error(ctx->ins, "cannot compose signing string");
         goto error_label;
@@ -301,9 +304,12 @@ static int build_headers(struct flb_http_client *c, struct flb_oci_logan *ctx,
 
     /* Add content-Type */
     signing_str = add_header_and_signing(c, signing_str,
-                                         FLB_OCI_HEADER_CONTENT_TYPE, sizeof(FLB_OCI_HEADER_CONTENT_TYPE) - 1,
-                                         FLB_OCI_HEADER_CONTENT_TYPE_VAL,
-                                         sizeof(FLB_OCI_HEADER_CONTENT_TYPE_VAL) - 1);
+                                         FLB_OCI_HEADER_CONTENT_TYPE,
+                                         sizeof(FLB_OCI_HEADER_CONTENT_TYPE) -
+                                         1, FLB_OCI_HEADER_CONTENT_TYPE_VAL,
+                                         sizeof
+                                         (FLB_OCI_HEADER_CONTENT_TYPE_VAL) -
+                                         1);
     if (!signing_str) {
         flb_plg_error(ctx->ins, "cannot compose signing string");
         goto error_label;
@@ -314,8 +320,9 @@ static int build_headers(struct flb_http_client *c, struct flb_oci_logan *ctx,
                        (int) flb_sds_len(json));
     flb_sds_len_set(tmp_sds, tmp_len);
     signing_str = add_header_and_signing(c, signing_str,
-                                         FLB_OCI_HEADER_CONTENT_LENGTH, sizeof(FLB_OCI_HEADER_CONTENT_LENGTH) - 1,
-                                         tmp_sds, flb_sds_len(tmp_sds));
+                                         FLB_OCI_HEADER_CONTENT_LENGTH,
+                                         sizeof(FLB_OCI_HEADER_CONTENT_LENGTH)
+                                         - 1, tmp_sds, flb_sds_len(tmp_sds));
     if (!signing_str) {
         flb_plg_error(ctx->ins, "cannot compose signing string");
         goto error_label;
@@ -334,8 +341,9 @@ static int build_headers(struct flb_http_client *c, struct flb_oci_logan *ctx,
         goto error_label;
     }
 
-    flb_http_add_header(c, FLB_OCI_HEADER_AUTH, sizeof(FLB_OCI_HEADER_AUTH) - 1,
-                        auth_header_str, flb_sds_len(auth_header_str));
+    flb_http_add_header(c, FLB_OCI_HEADER_AUTH,
+                        sizeof(FLB_OCI_HEADER_AUTH) - 1, auth_header_str,
+                        flb_sds_len(auth_header_str));
 
     /* User-Agent */
     flb_http_add_header(c, FLB_OCI_HEADER_USER_AGENT,
@@ -348,7 +356,7 @@ static int build_headers(struct flb_http_client *c, struct flb_oci_logan *ctx,
 
     ret = 0;
 
-    error_label:
+  error_label:
     if (tmp_sds) {
         flb_sds_destroy(tmp_sds);
     }
@@ -370,8 +378,11 @@ static int build_headers(struct flb_http_client *c, struct flb_oci_logan *ctx,
     return ret;
 }
 
-static struct flb_oci_error_response* parse_response_error(struct flb_oci_logan *ctx,
-                                                           char *response, size_t response_len)
+static struct flb_oci_error_response *parse_response_error(struct
+                                                           flb_oci_logan *ctx,
+                                                           char *response,
+                                                           size_t
+                                                           response_len)
 {
     int tok_size = 32, ret, i;
     jsmn_parser parser;
@@ -444,8 +455,9 @@ static struct flb_oci_error_response* parse_response_error(struct flb_oci_logan 
             }
         }
         else if ((key_len == sizeof(FLB_OCI_ERROR_RESPONSE_MESSAGE) - 1)
-            && strncasecmp(key, FLB_OCI_ERROR_RESPONSE_MESSAGE,
-                           sizeof(FLB_OCI_ERROR_RESPONSE_MESSAGE) - 1) == 0) {
+                 && strncasecmp(key, FLB_OCI_ERROR_RESPONSE_MESSAGE,
+                                sizeof(FLB_OCI_ERROR_RESPONSE_MESSAGE) - 1) ==
+                 0) {
 
             /* message */
             error_response->message = flb_sds_create_len(val, val_len);
@@ -468,9 +480,9 @@ static int retry_error(struct flb_http_client *c, struct flb_oci_logan *ctx)
     int ret = FLB_FALSE;
 
     /* possible retry error message */
-    if ( !(c->resp.status == 400 || c->resp.status == 401
-        || c->resp.status == 404 || c->resp.status == 409
-        || c->resp.status == 429 || c->resp.status == 500)) {
+    if (!(c->resp.status == 400 || c->resp.status == 401
+          || c->resp.status == 404 || c->resp.status == 409
+          || c->resp.status == 429 || c->resp.status == 500)) {
         return FLB_FALSE;
     }
 
@@ -484,38 +496,60 @@ static int retry_error(struct flb_http_client *c, struct flb_oci_logan *ctx)
     if (error_response->code) {
         tmp_len = flb_sds_len(error_response->code);
         if (c->resp.status == 400
-            && (tmp_len == sizeof(FLB_OCI_ERROR_CODE_RELATED_RESOURCE_NOT_FOUND) - 1)
-            && strncasecmp(error_response->code, FLB_OCI_ERROR_CODE_RELATED_RESOURCE_NOT_FOUND, tmp_len) == 0) {
+            && (tmp_len ==
+                sizeof(FLB_OCI_ERROR_CODE_RELATED_RESOURCE_NOT_FOUND) - 1)
+            && strncasecmp(error_response->code,
+                           FLB_OCI_ERROR_CODE_RELATED_RESOURCE_NOT_FOUND,
+                           tmp_len) == 0) {
             ret = FLB_TRUE;
         }
-        else if( c->resp.status == 401
-            &&( tmp_len == sizeof(FLB_OCI_ERROR_CODE_NOT_AUTHENTICATED)-1 )
-            && strncasecmp(error_response->code, FLB_OCI_ERROR_CODE_NOT_AUTHENTICATED, tmp_len) == 0) {
+        else if (c->resp.status == 401
+                 && (tmp_len ==
+                     sizeof(FLB_OCI_ERROR_CODE_NOT_AUTHENTICATED) - 1)
+                 && strncasecmp(error_response->code,
+                                FLB_OCI_ERROR_CODE_NOT_AUTHENTICATED,
+                                tmp_len) == 0) {
             ret = FLB_TRUE;
         }
         else if (c->resp.status == 404
-            && (tmp_len == sizeof(FLB_OCI_ERROR_CODE_NOT_AUTHENTICATEDORNOTFOUND) - 1)
-            && strncasecmp(error_response->code, FLB_OCI_ERROR_CODE_NOT_AUTHENTICATEDORNOTFOUND, tmp_len) == 0) {
+                 && (tmp_len ==
+                     sizeof(FLB_OCI_ERROR_CODE_NOT_AUTHENTICATEDORNOTFOUND) -
+                     1)
+                 && strncasecmp(error_response->code,
+                                FLB_OCI_ERROR_CODE_NOT_AUTHENTICATEDORNOTFOUND,
+                                tmp_len) == 0) {
             ret = FLB_TRUE;
         }
         else if (c->resp.status == 409
-            && (tmp_len == sizeof(FLB_OCI_ERROR_CODE_INCORRECTSTATE) - 1)
-            && strncasecmp(error_response->code, FLB_OCI_ERROR_CODE_INCORRECTSTATE, tmp_len) == 0) {
+                 && (tmp_len == sizeof(FLB_OCI_ERROR_CODE_INCORRECTSTATE) - 1)
+                 && strncasecmp(error_response->code,
+                                FLB_OCI_ERROR_CODE_INCORRECTSTATE,
+                                tmp_len) == 0) {
             ret = FLB_TRUE;
         }
         else if (c->resp.status == 409
-            && (tmp_len == sizeof(FLB_OCI_ERROR_CODE_NOT_AUTH_OR_RESOURCE_EXIST) - 1)
-            && strncasecmp(error_response->code, FLB_OCI_ERROR_CODE_NOT_AUTH_OR_RESOURCE_EXIST, tmp_len) == 0) {
+                 && (tmp_len ==
+                     sizeof(FLB_OCI_ERROR_CODE_NOT_AUTH_OR_RESOURCE_EXIST) -
+                     1)
+                 && strncasecmp(error_response->code,
+                                FLB_OCI_ERROR_CODE_NOT_AUTH_OR_RESOURCE_EXIST,
+                                tmp_len) == 0) {
             ret = FLB_TRUE;
         }
         else if (c->resp.status == 429
-            && (tmp_len == sizeof(FLB_OCI_ERROR_CODE_TOO_MANY_REQUESTS) - 1)
-            && strncasecmp(error_response->code, FLB_OCI_ERROR_CODE_TOO_MANY_REQUESTS, tmp_len) == 0) {
+                 && (tmp_len ==
+                     sizeof(FLB_OCI_ERROR_CODE_TOO_MANY_REQUESTS) - 1)
+                 && strncasecmp(error_response->code,
+                                FLB_OCI_ERROR_CODE_TOO_MANY_REQUESTS,
+                                tmp_len) == 0) {
             ret = FLB_TRUE;
         }
         else if (c->resp.status == 500
-            && (tmp_len == sizeof(FLB_OCI_ERROR_CODE_INTERNAL_SERVER_ERROR) - 1)
-            && strncasecmp(error_response->code, FLB_OCI_ERROR_CODE_INTERNAL_SERVER_ERROR, tmp_len) == 0) {
+                 && (tmp_len ==
+                     sizeof(FLB_OCI_ERROR_CODE_INTERNAL_SERVER_ERROR) - 1)
+                 && strncasecmp(error_response->code,
+                                FLB_OCI_ERROR_CODE_INTERNAL_SERVER_ERROR,
+                                tmp_len) == 0) {
             ret = FLB_TRUE;
         }
     }
@@ -532,8 +566,7 @@ static int retry_error(struct flb_http_client *c, struct flb_oci_logan *ctx)
 }
 
 static int cb_oci_logan_init(struct flb_output_instance *ins,
-                             struct flb_config *config,
-                             void *data)
+                             struct flb_config *config, void *data)
 {
     struct flb_oci_logan *ctx;
     ctx = flb_oci_logan_conf_create(ins, config);
@@ -568,8 +601,7 @@ static flb_sds_t compose_uri(struct flb_oci_logan *ctx,
         flb_sds_cat_safe(&uri_param, FLB_OCI_LOG_GROUP_ID,
                          FLB_OCI_LOG_GROUP_ID_SIZE);
         flb_sds_cat_safe(&uri_param, "=", 1);
-        flb_sds_cat_safe(&uri_param, log_group_id,
-                         flb_sds_len(log_group_id));
+        flb_sds_cat_safe(&uri_param, log_group_id, flb_sds_len(log_group_id));
     }
 
     if (!uri_param) {
@@ -581,11 +613,9 @@ static flb_sds_t compose_uri(struct flb_oci_logan *ctx,
         if (flb_sds_len(uri_param) > 0) {
             flb_sds_cat_safe(&uri_param, "&", 1);
         }
-        flb_sds_cat_safe(&uri_param, FLB_OCI_LOG_SET,
-                                 FLB_OCI_LOG_SET_SIZE);
+        flb_sds_cat_safe(&uri_param, FLB_OCI_LOG_SET, FLB_OCI_LOG_SET_SIZE);
         flb_sds_cat_safe(&uri_param, "=", 1);
-        flb_sds_cat_safe(&uri_param, log_set,
-                                 flb_sds_len(log_set));
+        flb_sds_cat_safe(&uri_param, log_set, flb_sds_len(log_set));
     }
 
     if (!uri_param) {
@@ -594,7 +624,7 @@ static flb_sds_t compose_uri(struct flb_oci_logan *ctx,
 
     flb_sds_cat_safe(&uri_param, "&", 1);
     flb_sds_cat_safe(&uri_param, FLB_OCI_PAYLOAD_TYPE,
-                            sizeof(FLB_OCI_PAYLOAD_TYPE) - 1);
+                     sizeof(FLB_OCI_PAYLOAD_TYPE) - 1);
     flb_sds_cat_safe(&uri_param, "=", 1);
     flb_sds_cat_safe(&uri_param, "JSON", 4);
 
@@ -609,8 +639,9 @@ static flb_sds_t compose_uri(struct flb_oci_logan *ctx,
         return flb_sds_create(ctx->uri);
     }
 
-    full_uri = flb_sds_create_size(
-        flb_sds_len(ctx->uri) + 1 + flb_sds_len(uri_param));
+    full_uri =
+        flb_sds_create_size(flb_sds_len(ctx->uri) + 1 +
+                            flb_sds_len(uri_param));
     if (!full_uri) {
         flb_errno();
         flb_sds_destroy(uri_param);
@@ -626,10 +657,315 @@ static flb_sds_t compose_uri(struct flb_oci_logan *ctx,
     return full_uri;
 }
 
+// Checks if the current security token needs refresh(expires within 5min)
+static int token_needs_refresh(struct flb_oci_logan *ctx)
+{
+    time_t now = time(NULL);
+
+    return (ctx->security_token.expires_at - now) < 300;
+}
+
+// Refreshes the security token if it's close to expiration
+static int refresh_security_token_if_needed(struct flb_oci_logan *ctx)
+{
+    if (!token_needs_refresh(ctx)) {
+        return 0;
+    }
+
+    flb_sds_t json_payload = create_federation_payload(ctx);
+    if (!json_payload) {
+        return -1;
+    }
+
+    flb_sds_t response = sign_and_send_federation_request(ctx, json_payload);
+    flb_sds_destroy(json_payload);
+
+    if (!response) {
+        return -1;
+    }
+
+    flb_sds_destroy(response);
+    flb_plg_info(ctx->ins, "success refresh security token");
+    return 0;
+}
+
+
+static flb_sds_t sign_oci_request_with_security_token_for_logging(struct
+                                                                  flb_oci_logan
+                                                                  *ctx,
+                                                                  const char
+                                                                  *uri_path,
+                                                                  const char
+                                                                  *payload,
+                                                                  size_t
+                                                                  payload_size,
+                                                                  flb_sds_t
+                                                                  date,
+                                                                  const char
+                                                                  *host,
+                                                                  const char
+                                                                  *content_sha256)
+{
+    flb_sds_t string_to_sign = NULL;
+    flb_sds_t signature_header = NULL;
+    flb_sds_t lowercase_method = flb_sds_create("post");
+    unsigned char *signature = NULL;
+    unsigned char *b64_out = NULL;
+    size_t sig_len = 0;
+    BIO *bio = NULL;
+    EVP_PKEY *pkey = NULL;
+    EVP_MD_CTX *md_ctx = NULL;
+    
+
+    string_to_sign = flb_sds_create_size(2048);
+    if (!string_to_sign) {
+        return NULL;
+    }
+    flb_sds_printf(&string_to_sign, "date: %s\n", date);
+    flb_sds_printf(&string_to_sign, "(request-target): %s %s\n",
+                   lowercase_method, uri_path);
+    flb_sds_printf(&string_to_sign, "host: %s\n", host);
+    flb_sds_printf(&string_to_sign, "x-content-sha256: %s\n", content_sha256);
+
+    if (payload && payload_size > 0) {
+        flb_sds_printf(&string_to_sign,
+                       "content-type: application/octet-stream\n");
+        flb_sds_printf(&string_to_sign, "content-length: %zu", payload_size);
+    }
+    else {
+        flb_sds_printf(&string_to_sign, "content-length: 0");
+    }
+
+    flb_plg_debug(ctx->ins, "String to sign for la ->> [%s]", string_to_sign);
+
+    bio = BIO_new_mem_buf((void *) ctx->imds.session_privkey, -1);
+    if (!bio) {
+        goto cleanup;
+    }
+
+    pkey = PEM_read_bio_PrivateKey(bio, NULL, NULL, NULL);
+    if (!pkey) {
+        goto cleanup;
+    }
+
+    md_ctx = EVP_MD_CTX_new();
+    if (!md_ctx) {
+        goto cleanup;
+    }
+
+    if (EVP_DigestSignInit(md_ctx, NULL, EVP_sha256(), NULL, pkey) <= 0) {
+        goto cleanup;
+    }
+
+    if (EVP_DigestSignUpdate
+        (md_ctx, string_to_sign, flb_sds_len(string_to_sign)) <= 0) {
+        goto cleanup;
+    }
+
+    if (EVP_DigestSignFinal(md_ctx, NULL, &sig_len) <= 0) {
+        goto cleanup;
+    }
+
+    signature = flb_malloc(sig_len);
+    if (!signature) {
+        goto cleanup;
+    }
+
+    if (EVP_DigestSignFinal(md_ctx, signature, &sig_len) <= 0) {
+        goto cleanup;
+    }
+
+    size_t b64_size = ((sig_len + 2) / 3) * 4 + 1;
+    size_t olen = 0;
+    b64_out = flb_malloc(b64_size);
+    if (!b64_out) {
+        goto cleanup;
+    }
+
+    if (flb_base64_encode(b64_out, b64_size, &olen, signature, sig_len) != 0) {
+        goto cleanup;
+    }
+    b64_out[olen] = '\0';
+
+    signature_header = flb_sds_create_size(2048);
+    if (!signature_header) {
+        goto cleanup;
+    }
+
+    const char *headers_list = payload && payload_size > 0 ?
+        "date (request-target) host x-content-sha256 content-type content-length"
+        : "date (request-target) host x-content-sha256 content-length";
+
+    flb_sds_printf(&signature_header,
+                   "Signature version=\"1\",keyId=\"ST$%s\",algorithm=\"rsa-sha256\","
+                   "signature=\"%s\",headers=\"%s\"",
+                   ctx->security_token.token, b64_out, headers_list);
+
+  cleanup:
+    if (bio)
+        BIO_free(bio);
+    if (pkey)
+        EVP_PKEY_free(pkey);
+    if (md_ctx)
+        EVP_MD_CTX_free(md_ctx);
+    if (signature)
+        flb_free(signature);
+    if (b64_out)
+        flb_free(b64_out);
+    if (string_to_sign)
+        flb_sds_destroy(string_to_sign);
+    if (lowercase_method)
+        flb_sds_destroy(lowercase_method);
+
+    return signature_header;
+}
+
+static char *calculate_content_sha256_b64(const char *content, size_t len)
+{
+    unsigned char hash[SHA256_DIGEST_LENGTH];
+    char *b64_hash = NULL;
+    size_t b64_len = 4 * ((SHA256_DIGEST_LENGTH + 2) / 3) + 1;
+
+    SHA256((unsigned char *) content, len, hash);
+
+    b64_hash = flb_malloc(b64_len);
+    if (!b64_hash) {
+        return NULL;
+    }
+
+    if (flb_base64_encode
+        ((unsigned char *)b64_hash, b64_len, &b64_len, hash, SHA256_DIGEST_LENGTH) != 0) {
+        flb_free(b64_hash);
+        return NULL;
+    }
+    b64_hash[b64_len] = '\0';
+
+    return b64_hash;
+}
+
+
+struct flb_http_client *create_oci_signed_request_for_logging(struct
+                                                              flb_oci_logan
+                                                              *ctx,
+                                                              struct
+                                                              flb_connection
+                                                              *u_conn,
+                                                              const char
+                                                              *uri_path,
+                                                              const char
+                                                              *host, int port,
+                                                              const char
+                                                              *payload,
+                                                              size_t
+                                                              payload_size,
+                                                              bool *should_retry)
+{
+    struct flb_http_client *client = NULL;
+    flb_sds_t date_header = NULL;
+    flb_sds_t signature_header = NULL;
+    char *content_sha256 = NULL;
+    char date_buf[128];
+    time_t now;
+    struct tm *tm_info;
+
+
+    if (refresh_security_token_if_needed(ctx) < 0) {
+        flb_plg_error(ctx->ins, "refresh_security_token_if_needed failed ");
+        *should_retry = 1;
+        return NULL;
+    }
+
+    if (!ctx->security_token.token
+        || flb_sds_len(ctx->security_token.token) == 0) {
+        return NULL;
+    }
+
+    time(&now);
+    tm_info = gmtime(&now);
+    if (!tm_info) {
+        return NULL;
+    }
+
+    size_t date_len =
+        strftime(date_buf, sizeof(date_buf) - 1, "%a, %d %b %Y %H:%M:%S GMT",
+                 tm_info);
+    if (date_len == 0) {
+        return NULL;
+    }
+
+    date_buf[date_len] = '\0';
+    date_header = flb_sds_create_len(date_buf, date_len);
+    if (!date_header) {
+        return NULL;
+    }
+
+    if (payload && payload_size > 0) {
+        content_sha256 = calculate_content_sha256_b64(payload, payload_size);
+    }
+    else {
+        content_sha256 = calculate_content_sha256_b64("", 0);
+    }
+
+    if (!content_sha256) {
+        goto cleanup;
+    }
+
+    client = flb_http_client(u_conn, FLB_HTTP_POST, uri_path,
+                             payload, payload_size, host, port, NULL, 0);
+    if (!client) {
+        goto cleanup;
+    }
+
+    flb_http_add_header(client, "Date", 4, date_header,
+                        flb_sds_len(date_header));
+    flb_http_add_header(client, "Accept", 6, "application/json", 16);
+
+    if (payload && payload_size > 0) {
+        flb_http_add_header(client, "Content-Type", 12,
+                            "application/octet-stream", 24);
+    }
+
+    flb_http_add_header(client, "x-content-sha256", 16, content_sha256,
+                        strlen(content_sha256));
+
+    const char *user_agent = "fluent-bit-oci-plugin/1.0";
+    flb_http_add_header(client, "User-Agent", 10, user_agent,
+                        strlen(user_agent));
+
+    signature_header =
+        sign_oci_request_with_security_token_for_logging(ctx,
+                                                         uri_path, payload,
+                                                         payload_size,
+                                                         date_header, host,
+                                                         content_sha256 );
+    if (!signature_header) {
+        goto cleanup;
+    }
+
+    flb_http_add_header(client, "Authorization", 13, signature_header,
+                        flb_sds_len(signature_header));
+    flb_sds_destroy(date_header);
+    flb_sds_destroy(signature_header);
+    flb_free(content_sha256);
+
+    return client;
+
+  cleanup:
+    if (client)
+        flb_http_client_destroy(client);
+    if (date_header)
+        flb_sds_destroy(date_header);
+    if (signature_header)
+        flb_sds_destroy(signature_header);
+    if (content_sha256)
+        flb_free(content_sha256);
+
+    return NULL;
+}
+
 static int flush_to_endpoint(struct flb_oci_logan *ctx,
                              flb_sds_t payload,
-                             flb_sds_t log_group_id,
-                             flb_sds_t log_set_id)
+                             flb_sds_t log_group_id, flb_sds_t log_set_id)
 {
     int out_ret = FLB_RETRY;
     int http_ret;
@@ -639,40 +975,67 @@ static int flush_to_endpoint(struct flb_oci_logan *ctx,
     struct flb_connection *u_conn;
 
     full_uri = compose_uri(ctx, log_set_id, log_group_id);
-    if(!full_uri) {
-        flb_plg_error(ctx->ins, "unable to compose uri for logGroup: %s logSet: %s",
+    if (!full_uri) {
+        flb_plg_error(ctx->ins,
+                      "unable to compose uri for logGroup: %s logSet: %s",
                       ctx->oci_la_log_group_id, ctx->oci_la_log_set_id);
+        return FLB_ERROR;
     }
 
     flb_plg_debug(ctx->ins, "full_uri=%s", full_uri);
 
     u_conn = flb_upstream_conn_get(ctx->u);
-    if(!u_conn) {
-        goto error_label;
+    if (!u_conn) {
+        flb_sds_destroy(full_uri);
+        return FLB_ERROR;
     }
-    /* Create HTTP client context */
-    c = flb_http_client(u_conn, FLB_HTTP_POST, full_uri, (void*) payload,
-                        flb_sds_len(payload), ctx->ins->host.name, ctx->ins->host.port, ctx->proxy, 0);
-    if (!c) {
-        goto error_label;
+    bool should_retry = 0;
+    if (strcmp(ctx->auth_type, "instance_principal") == 0) {
+        c = create_oci_signed_request_for_logging(ctx, u_conn,
+                                                  full_uri,
+                                                  ctx->ins->host.name,
+                                                  ctx->ins->host.port,
+                                                  payload,
+                                                  flb_sds_len(payload), &should_retry);
+        if (!c) {
+            flb_plg_error(ctx->ins, "failed to create instance principal client for logging");
+            out_ret = should_retry * FLB_RETRY;
+            goto error_label;
+        }
     }
-    flb_http_allow_duplicated_headers(c, FLB_FALSE);
+    else {
+        c = flb_http_client(u_conn, FLB_HTTP_POST, full_uri, (void *) payload,
+                            flb_sds_len(payload), ctx->ins->host.name,
+                            ctx->ins->host.port, ctx->proxy, 0);
+        if (!c) {
+            goto error_label;
+        }
+        flb_http_allow_duplicated_headers(c, FLB_FALSE);
 
-    flb_plg_debug(ctx->ins, "built client");
-    flb_http_buffer_size(c, FLB_HTTP_DATA_SIZE_MAX);
-    if (build_headers(c, ctx, payload, ctx->ins->host.name, ctx->ins->host.port, full_uri) < 0) {
-        flb_plg_error(ctx->ins, "failed to build headers");
+        flb_http_buffer_size(c, FLB_HTTP_DATA_SIZE_MAX);
+
+        if (build_headers
+            (c, ctx, payload, ctx->ins->host.name, ctx->ins->host.port,
+             full_uri) < 0) {
+            flb_plg_error(ctx->ins, "failed to build headers");
+            goto error_label;
+        }
+    }
+
+    if (!c) {
+        flb_plg_error(ctx->ins, "failed to create HTTP client");
         goto error_label;
     }
-    flb_plg_debug(ctx->ins, "built request");
 
     out_ret = FLB_OK;
 
     http_ret = flb_http_do(c, &b_sent);
-    flb_plg_debug(ctx->ins, "placed request");
+    FILE *p = fopen("flush_to_endpoint.log", "w");
+
+    fprintf(p, "%s\n", c->header_buf);
+    flb_plg_debug(ctx->ins, "do request");
 
     if (http_ret == 0) {
-
         if (c->resp.status != 200) {
             flb_plg_debug(ctx->ins, "request header %s", c->header_buf);
 
@@ -695,18 +1058,22 @@ static int flush_to_endpoint(struct flb_oci_logan *ctx,
                               c->resp.status);
             }
         }
+        else {
+            flb_plg_debug(ctx->ins, "data -> [%s]\theaders->[%s]",
+                          c->resp.data, c->resp.headers_end);
+            flb_plg_info(ctx->ins, "log sent to oci   with success");
+        }
     }
     else {
         out_ret = FLB_RETRY;
-        flb_plg_error(ctx->ins, "could not flush records to %s:%i (http_do=%i), retry=%s",
-                      ctx->ins->host.name, ctx->ins->host.port,
-                      http_ret, (out_ret == FLB_RETRY ? "true" : "false"));
+        flb_plg_error(ctx->ins,
+                      "could not flush records to %s:%i (http_do=%i), retry=%s",
+                      ctx->ins->host.name, ctx->ins->host.port, http_ret,
+                      (out_ret == FLB_RETRY ? "true" : "false"));
         goto error_label;
     }
 
-
-
-    error_label:
+error_label:
     if (full_uri) {
         flb_sds_destroy(full_uri);
     }
@@ -722,11 +1089,10 @@ static int flush_to_endpoint(struct flb_oci_logan *ctx,
     }
 
     return out_ret;
-
 }
 
-static void pack_oci_fields(msgpack_packer *packer,
-                            struct flb_oci_logan *ctx)
+
+static void pack_oci_fields(msgpack_packer *packer, struct flb_oci_logan *ctx)
 {
     int num_global_meta = 0;
     int num_event_meta = 0;
@@ -736,10 +1102,10 @@ static void pack_oci_fields(msgpack_packer *packer,
 
 
     /* number of meta properties */
-    if(ctx->oci_la_global_metadata != NULL) {
+    if (ctx->oci_la_global_metadata != NULL) {
         num_global_meta = mk_list_size(&ctx->global_metadata_fields);
     }
-    if(ctx->oci_la_metadata != NULL) {
+    if (ctx->oci_la_metadata != NULL) {
         num_event_meta = mk_list_size(&ctx->log_event_metadata_fields);
     }
 
@@ -790,7 +1156,8 @@ static void pack_oci_fields(msgpack_packer *packer,
      ]
      */
     msgpack_pack_str(packer, FLB_OCI_LOG_EVENTS_SIZE);
-    msgpack_pack_str_body(packer, FLB_OCI_LOG_EVENTS, FLB_OCI_LOG_EVENTS_SIZE);
+    msgpack_pack_str_body(packer, FLB_OCI_LOG_EVENTS,
+                          FLB_OCI_LOG_EVENTS_SIZE);
 
     msgpack_pack_array(packer, 1);
 
@@ -808,13 +1175,14 @@ static void pack_oci_fields(msgpack_packer *packer,
         pck_sz++;
     }
 
-    msgpack_pack_map(packer, pck_sz); /* entityId, logSourceName, logPath, logRecords */
+    msgpack_pack_map(packer, pck_sz);   /* entityId, logSourceName, logPath, logRecords */
 
 
     /* "entityType:"" */
     if (ctx->oci_la_entity_type) {
         msgpack_pack_str(packer, FLB_OCI_ENTITY_TYPE_SIZE);
-        msgpack_pack_str_body(packer, FLB_OCI_ENTITY_TYPE, FLB_OCI_ENTITY_TYPE_SIZE);
+        msgpack_pack_str_body(packer, FLB_OCI_ENTITY_TYPE,
+                              FLB_OCI_ENTITY_TYPE_SIZE);
         msgpack_pack_str(packer, flb_sds_len(ctx->oci_la_entity_type));
         msgpack_pack_str_body(packer, ctx->oci_la_entity_type,
                               flb_sds_len(ctx->oci_la_entity_type));
@@ -823,7 +1191,8 @@ static void pack_oci_fields(msgpack_packer *packer,
     /* "entityId":"", */
     if (ctx->oci_la_entity_id) {
         msgpack_pack_str(packer, FLB_OCI_ENTITY_ID_SIZE);
-        msgpack_pack_str_body(packer, FLB_OCI_ENTITY_ID, FLB_OCI_ENTITY_ID_SIZE);
+        msgpack_pack_str_body(packer, FLB_OCI_ENTITY_ID,
+                              FLB_OCI_ENTITY_ID_SIZE);
         msgpack_pack_str(packer, flb_sds_len(ctx->oci_la_entity_id));
         msgpack_pack_str_body(packer, ctx->oci_la_entity_id,
                               flb_sds_len(ctx->oci_la_entity_id));
@@ -842,7 +1211,8 @@ static void pack_oci_fields(msgpack_packer *packer,
     /* "logPath":"" */
     if (ctx->oci_la_log_path) {
         msgpack_pack_str(packer, FLB_OCI_LOG_PATH_SIZE);
-        msgpack_pack_str_body(packer, FLB_OCI_LOG_PATH, FLB_OCI_LOG_PATH_SIZE);
+        msgpack_pack_str_body(packer, FLB_OCI_LOG_PATH,
+                              FLB_OCI_LOG_PATH_SIZE);
         msgpack_pack_str(packer, flb_sds_len(ctx->oci_la_log_path));
         msgpack_pack_str_body(packer, ctx->oci_la_log_path,
                               flb_sds_len(ctx->oci_la_log_path));
@@ -852,11 +1222,11 @@ static void pack_oci_fields(msgpack_packer *packer,
     /* Add metadata */
     if (num_event_meta > 0) {
         /*
-         "metadata":{
-         "Error ID":"0",
-         "Environment":"dev",
-         "Client Host Region":"IST"
-         },
+           "metadata":{
+           "Error ID":"0",
+           "Environment":"dev",
+           "Client Host Region":"IST"
+           },
          */
         msgpack_pack_str(packer, FLB_OCI_LOG_METADATA_SIZE);
         msgpack_pack_str_body(packer, FLB_OCI_LOG_METADATA,
@@ -886,7 +1256,7 @@ static int get_and_pack_oci_fields_from_record(msgpack_packer *packer,
 {
     int map_size = map.via.map.size;
     int pck_size = 1, i;
-    msgpack_object *log_group_id= NULL;
+    msgpack_object *log_group_id = NULL;
     msgpack_object *log_set_id = NULL;
     msgpack_object *entity_id = NULL;
     msgpack_object *entity_type = NULL;
@@ -895,26 +1265,29 @@ static int get_and_pack_oci_fields_from_record(msgpack_packer *packer,
     msgpack_object *global_metadata = NULL;
     msgpack_object *metadata = NULL;
 
-    for(i = 0; i < map_size; i++) {
+    for (i = 0; i < map_size; i++) {
         if (check_config_from_record(map.via.map.ptr[i].key,
                                      FLB_OCI_LOG_GROUP_ID_KEY,
-                                     FLB_OCI_LOG_GROUP_ID_KEY_SIZE) == FLB_TRUE) {
+                                     FLB_OCI_LOG_GROUP_ID_KEY_SIZE) ==
+            FLB_TRUE) {
             if (map.via.map.ptr[i].val.type == MSGPACK_OBJECT_STR) {
                 log_group_id = &map.via.map.ptr[i].val;
             }
             continue;
         }
         else if (check_config_from_record(map.via.map.ptr[i].key,
-                                     FLB_OCI_LOG_SET_ID_KEY,
-                                     FLB_OCI_LOG_SET_ID_KEY_SIZE) == FLB_TRUE) {
+                                          FLB_OCI_LOG_SET_ID_KEY,
+                                          FLB_OCI_LOG_SET_ID_KEY_SIZE) ==
+                 FLB_TRUE) {
             if (map.via.map.ptr[i].val.type == MSGPACK_OBJECT_STR) {
                 log_set_id = &map.via.map.ptr[i].val;
             }
             continue;
         }
         else if (check_config_from_record(map.via.map.ptr[i].key,
-                                     FLB_OCI_LOG_ENTITY_ID_KEY,
-                                     FLB_OCI_LOG_ENTITY_ID_KEY_SIZE) == FLB_TRUE) {
+                                          FLB_OCI_LOG_ENTITY_ID_KEY,
+                                          FLB_OCI_LOG_ENTITY_ID_KEY_SIZE) ==
+                 FLB_TRUE) {
             if (map.via.map.ptr[i].val.type == MSGPACK_OBJECT_STR) {
                 entity_id = &map.via.map.ptr[i].val;
                 pck_size++;
@@ -922,8 +1295,9 @@ static int get_and_pack_oci_fields_from_record(msgpack_packer *packer,
             continue;
         }
         else if (check_config_from_record(map.via.map.ptr[i].key,
-                                     FLB_OCI_LOG_ENTITY_TYPE_KEY,
-                                     FLB_OCI_LOG_ENTITY_TYPE_KEY_SIZE) == FLB_TRUE) {
+                                          FLB_OCI_LOG_ENTITY_TYPE_KEY,
+                                          FLB_OCI_LOG_ENTITY_TYPE_KEY_SIZE) ==
+                 FLB_TRUE) {
             if (map.via.map.ptr[i].val.type == MSGPACK_OBJECT_STR) {
                 entity_type = &map.via.map.ptr[i].val;
                 pck_size++;
@@ -931,8 +1305,9 @@ static int get_and_pack_oci_fields_from_record(msgpack_packer *packer,
             continue;
         }
         else if (check_config_from_record(map.via.map.ptr[i].key,
-                                     FLB_OCI_LOG_SOURCE_NAME_KEY,
-                                     FLB_OCI_LOG_SOURCE_NAME_KEY_SIZE) == FLB_TRUE) {
+                                          FLB_OCI_LOG_SOURCE_NAME_KEY,
+                                          FLB_OCI_LOG_SOURCE_NAME_KEY_SIZE) ==
+                 FLB_TRUE) {
             if (map.via.map.ptr[i].val.type == MSGPACK_OBJECT_STR) {
                 log_source = &map.via.map.ptr[i].val;
                 pck_size++;
@@ -940,8 +1315,9 @@ static int get_and_pack_oci_fields_from_record(msgpack_packer *packer,
             continue;
         }
         else if (check_config_from_record(map.via.map.ptr[i].key,
-                                     FLB_OCI_LOG_PATH_KEY,
-                                     FLB_OCI_LOG_PATH_KEY_SIZE) == FLB_TRUE) {
+                                          FLB_OCI_LOG_PATH_KEY,
+                                          FLB_OCI_LOG_PATH_KEY_SIZE) ==
+                 FLB_TRUE) {
             if (map.via.map.ptr[i].val.type == MSGPACK_OBJECT_STR) {
                 log_path = &map.via.map.ptr[i].val;
                 pck_size++;
@@ -949,8 +1325,9 @@ static int get_and_pack_oci_fields_from_record(msgpack_packer *packer,
             continue;
         }
         else if (check_config_from_record(map.via.map.ptr[i].key,
-                                     FLB_OCI_METADATA_KEY,
-                                     FLB_OCI_METADATA_KEY_SIZE) == FLB_TRUE) {
+                                          FLB_OCI_METADATA_KEY,
+                                          FLB_OCI_METADATA_KEY_SIZE) ==
+                 FLB_TRUE) {
             if (map.via.map.ptr[i].val.type == MSGPACK_OBJECT_STR) {
                 metadata = &map.via.map.ptr[i].val;
                 pck_size++;
@@ -958,8 +1335,9 @@ static int get_and_pack_oci_fields_from_record(msgpack_packer *packer,
             continue;
         }
         else if (check_config_from_record(map.via.map.ptr[i].key,
-                                     FLB_OCI_GLOBAL_METADATA_KEY,
-                                     FLB_OCI_GLOBAL_METADATA_KEY_SIZE) == FLB_TRUE) {
+                                          FLB_OCI_GLOBAL_METADATA_KEY,
+                                          FLB_OCI_GLOBAL_METADATA_KEY_SIZE) ==
+                 FLB_TRUE) {
             if (map.via.map.ptr[i].val.type == MSGPACK_OBJECT_STR) {
                 global_metadata = &map.via.map.ptr[i].val;
             }
@@ -1006,13 +1384,14 @@ static int get_and_pack_oci_fields_from_record(msgpack_packer *packer,
      ]
      */
     msgpack_pack_str(packer, FLB_OCI_LOG_EVENTS_SIZE);
-    msgpack_pack_str_body(packer, FLB_OCI_LOG_EVENTS, FLB_OCI_LOG_EVENTS_SIZE);
+    msgpack_pack_str_body(packer, FLB_OCI_LOG_EVENTS,
+                          FLB_OCI_LOG_EVENTS_SIZE);
 
     msgpack_pack_array(packer, 1);
 
     if (metadata != NULL) {
         pck_size++;
-        msgpack_pack_map(packer, pck_size); /* entityType, entityId, logSourceName, logPath, metadata, logRecords */
+        msgpack_pack_map(packer, pck_size);     /* entityType, entityId, logSourceName, logPath, metadata, logRecords */
         msgpack_pack_str(packer, FLB_OCI_LOG_METADATA_SIZE);
         msgpack_pack_str_body(packer, FLB_OCI_LOG_METADATA,
                               FLB_OCI_LOG_METADATA_SIZE);
@@ -1020,20 +1399,22 @@ static int get_and_pack_oci_fields_from_record(msgpack_packer *packer,
 
     }
     else {
-        msgpack_pack_map(packer, pck_size); /* entityType, entityId, logSourceName, logPath, logRecords */
+        msgpack_pack_map(packer, pck_size);     /* entityType, entityId, logSourceName, logPath, logRecords */
     }
 
     /* "entityType:"" */
     if (entity_type) {
         msgpack_pack_str(packer, FLB_OCI_ENTITY_TYPE_SIZE);
-        msgpack_pack_str_body(packer, FLB_OCI_ENTITY_TYPE, FLB_OCI_ENTITY_TYPE_SIZE);
+        msgpack_pack_str_body(packer, FLB_OCI_ENTITY_TYPE,
+                              FLB_OCI_ENTITY_TYPE_SIZE);
         msgpack_pack_object(packer, *entity_type);
     }
 
     /* "entityId":"", */
     if (entity_type) {
         msgpack_pack_str(packer, FLB_OCI_ENTITY_ID_SIZE);
-        msgpack_pack_str_body(packer, FLB_OCI_ENTITY_ID, FLB_OCI_ENTITY_ID_SIZE);
+        msgpack_pack_str_body(packer, FLB_OCI_ENTITY_ID,
+                              FLB_OCI_ENTITY_ID_SIZE);
         msgpack_pack_object(packer, *entity_id);
     }
 
@@ -1049,17 +1430,22 @@ static int get_and_pack_oci_fields_from_record(msgpack_packer *packer,
     /* "logPath":"" */
     if (log_path) {
         msgpack_pack_str(packer, FLB_OCI_LOG_PATH_SIZE);
-        msgpack_pack_str_body(packer, FLB_OCI_LOG_PATH, FLB_OCI_LOG_PATH_SIZE);
+        msgpack_pack_str_body(packer, FLB_OCI_LOG_PATH,
+                              FLB_OCI_LOG_PATH_SIZE);
         msgpack_pack_object(packer, *log_path);
     }
 
-    *lg_id = flb_sds_create_len(log_group_id->via.str.ptr, log_group_id->via.str.size);
-    if(!*lg_id) {
+    *lg_id =
+        flb_sds_create_len(log_group_id->via.str.ptr,
+                           log_group_id->via.str.size);
+    if (!*lg_id) {
         return -1;
     }
     if (log_set_id != NULL) {
-        *ls_id = flb_sds_create_len(log_set_id->via.str.ptr, log_set_id->via.str.size);
-        if(!*ls_id) {
+        *ls_id =
+            flb_sds_create_len(log_set_id->via.str.ptr,
+                               log_set_id->via.str.size);
+        if (!*ls_id) {
             return -1;
         }
     }
@@ -1087,15 +1473,15 @@ static int total_flush(struct flb_event_chunk *event_chunk,
     flb_sds_t log_set_id = NULL;
     int count = 0;
 
-    ret = flb_log_event_decoder_init(&log_decoder, (char *) event_chunk->data, event_chunk->size);
-
+    ret =
+        flb_log_event_decoder_init(&log_decoder, (char *) event_chunk->data,
+                                   event_chunk->size);
     if (ret != FLB_EVENT_DECODER_SUCCESS) {
         flb_plg_error(ctx->ins,
                       "Log event decoder initialization error : %d", ret);
         res = FLB_ERROR;
         goto clean_up;
     }
-
     /* Create temporary msgpack buffer */
     msgpack_sbuffer_init(&mp_sbuf);
     msgpack_packer_init(&mp_pck, &mp_sbuf, msgpack_sbuffer_write);
@@ -1104,19 +1490,23 @@ static int total_flush(struct flb_event_chunk *event_chunk,
     /* pack_oci_fields(&mp_pck, ctx); */
 
     num_records = flb_mp_count(event_chunk->data, event_chunk->size);
-
-    while ((ret = flb_log_event_decoder_next(
-        &log_decoder,
-        &log_event)) == FLB_EVENT_DECODER_SUCCESS) {
-        map      = *log_event.body;
+    // add checker for size
+    while ((ret = flb_log_event_decoder_next(&log_decoder,
+                                             &log_event)) ==
+           FLB_EVENT_DECODER_SUCCESS) {
+        map = *log_event.body;
         map_size = map.via.map.size;
         if (count < 1) {
             if (ctx->oci_config_in_record == FLB_FALSE) {
                 pack_oci_fields(&mp_pck, ctx);
                 log_group_id = ctx->oci_la_log_group_id;
                 log_set_id = ctx->oci_la_log_set_id;
-            } else {
-                ret1 = get_and_pack_oci_fields_from_record(&mp_pck, map, &log_group_id, &log_set_id, ctx);
+            }
+            else {
+                ret1 =
+                    get_and_pack_oci_fields_from_record(&mp_pck, map,
+                                                        &log_group_id,
+                                                        &log_set_id, ctx);
                 if (ret1 != 0) {
                     break;
                 }
@@ -1128,26 +1518,26 @@ static int total_flush(struct flb_event_chunk *event_chunk,
             count++;
         }
 
-        for(i = 0; i < map_size; i++) {
+        for (i = 0; i < map_size; i++) {
             if (check_config_from_record(map.via.map.ptr[i].key,
-                                         "message",
-                                         7) == FLB_TRUE) {
+                                         "message", 7) == FLB_TRUE) {
                 msg = i;
             }
             if (check_config_from_record(map.via.map.ptr[i].key,
-                                        "log",
-                                        3) == FLB_TRUE) {
+                                         "log", 3) == FLB_TRUE) {
                 log = i;
             }
         }
         if (log >= 0) {
             msgpack_pack_str(&mp_pck, map.via.map.ptr[log].val.via.str.size);
-            msgpack_pack_str_body(&mp_pck, map.via.map.ptr[log].val.via.str.ptr,
+            msgpack_pack_str_body(&mp_pck,
+                                  map.via.map.ptr[log].val.via.str.ptr,
                                   map.via.map.ptr[log].val.via.str.size);
         }
         else if (msg >= 0) {
             msgpack_pack_str(&mp_pck, map.via.map.ptr[msg].val.via.str.size);
-            msgpack_pack_str_body(&mp_pck, map.via.map.ptr[msg].val.via.str.ptr,
+            msgpack_pack_str_body(&mp_pck,
+                                  map.via.map.ptr[msg].val.via.str.ptr,
                                   map.via.map.ptr[msg].val.via.str.size);
         }
         log = -1;
@@ -1162,6 +1552,7 @@ static int total_flush(struct flb_event_chunk *event_chunk,
     }
 
     out_buf = flb_msgpack_raw_to_json_sds(mp_sbuf.data, mp_sbuf.size);
+    flb_plg_debug(ctx->ins, "out_buf->[%s]", out_buf);
     msgpack_sbuffer_destroy(&mp_sbuf);
     flb_log_event_decoder_destroy(&log_decoder);
 
@@ -1169,12 +1560,12 @@ static int total_flush(struct flb_event_chunk *event_chunk,
     flb_plg_debug(ctx->ins, "lg_id=%s", log_group_id);
 
     ret = flush_to_endpoint(ctx, out_buf, log_group_id, log_set_id);
-    if(ret != FLB_OK) {
+    if (ret != FLB_OK) {
         res = FLB_RETRY;
         goto clean_up;
     }
 
-    clean_up:
+  clean_up:
     if (out_buf != NULL) {
         flb_sds_destroy(out_buf);
     }
@@ -1188,16 +1579,14 @@ static int total_flush(struct flb_event_chunk *event_chunk,
 }
 
 static void cb_oci_logan_flush(struct flb_event_chunk *event_chunk,
-                              struct flb_output_flush *out_flush,
-                              struct flb_input_instance *ins, void *out_context,
-                              struct flb_config *config)
+                               struct flb_output_flush *out_flush,
+                               struct flb_input_instance *ins,
+                               void *out_context, struct flb_config *config)
 {
     struct flb_oci_logan *ctx = out_context;
     int ret = -1;
 
-    ret = total_flush(event_chunk, out_flush,
-                      ins, out_context,
-                      config);
+    ret = total_flush(event_chunk, out_flush, ins, out_context, config);
     if (ret != FLB_OK) {
         FLB_OUTPUT_RETURN(ret);
     }
@@ -1218,101 +1607,96 @@ static int cb_oci_logan_exit(void *data, struct flb_config *config)
 /* Configuration properties map */
 static struct flb_config_map config_map[] = {
     {
-        FLB_CONFIG_MAP_STR, "config_file_location", "",
-        0, FLB_TRUE, offsetof(struct flb_oci_logan, config_file_location),
-        "Location of the oci config file for user api key signing"
-    },
+     FLB_CONFIG_MAP_STR, "auth_type", "config_file",
+     0, FLB_TRUE, offsetof(struct flb_oci_logan, auth_type),
+     "Authentication mode : config_file as default or instance_principal"},
     {
-        FLB_CONFIG_MAP_STR, "profile_name", "DEFAULT",
-        0, FLB_TRUE, offsetof(struct flb_oci_logan, profile_name),
-        "name of the profile in the config file from which the user configs should be loaded"
-    },
+     FLB_CONFIG_MAP_STR, "domain_suffix", NULL,
+     0, FLB_TRUE, offsetof(struct flb_oci_logan, domain_suffix),
+     "domaine suffix : NULL as default or oci domain"},
     {
-        FLB_CONFIG_MAP_BOOL, "oci_config_in_record", "false",
-        0, FLB_TRUE, offsetof(struct flb_oci_logan, oci_config_in_record),
-        "If true, oci_la_* configs will be read from the record"
-    },
+     FLB_CONFIG_MAP_STR, "config_file_location", "",
+     0, FLB_TRUE, offsetof(struct flb_oci_logan, config_file_location),
+     "Location of the oci config file for user api key signing"},
     {
-        FLB_CONFIG_MAP_STR, "uri", NULL,
-        0, FLB_TRUE, offsetof(struct flb_oci_logan, uri),
-        "Set the uri for rest api request"
-    },
+     FLB_CONFIG_MAP_STR, "profile_name", "DEFAULT",
+     0, FLB_TRUE, offsetof(struct flb_oci_logan, profile_name),
+     "name of the profile in the config file from which the user configs should be loaded"},
     {
-        FLB_CONFIG_MAP_STR, "oci_la_log_group_id", NULL,
-        0, FLB_TRUE, offsetof(struct flb_oci_logan, oci_la_log_group_id),
-        "log group id"
-    },
+     FLB_CONFIG_MAP_BOOL, "oci_config_in_record", "false",
+     0, FLB_TRUE, offsetof(struct flb_oci_logan, oci_config_in_record),
+     "If true, oci_la_* configs will be read from the record"},
     {
-        FLB_CONFIG_MAP_STR, "oci_la_log_set_id", NULL,
-        0, FLB_TRUE, offsetof(struct flb_oci_logan, oci_la_log_set_id),
-        ""
-    },
+     FLB_CONFIG_MAP_STR, "uri", NULL,
+     0, FLB_TRUE, offsetof(struct flb_oci_logan, uri),
+     "Set the uri for rest api request"},
     {
-        FLB_CONFIG_MAP_STR, "oci_la_entity_id", NULL,
-        0, FLB_TRUE, offsetof(struct flb_oci_logan, oci_la_entity_id),
-        ""
-    },
+     FLB_CONFIG_MAP_STR, "oci_la_log_group_id", NULL,
+     0, FLB_TRUE, offsetof(struct flb_oci_logan, oci_la_log_group_id),
+     "log group id"},
     {
-        FLB_CONFIG_MAP_STR, "oci_la_entity_type", NULL,
-        0, FLB_TRUE, offsetof(struct flb_oci_logan, oci_la_entity_type),
-        ""
-    },
+     FLB_CONFIG_MAP_STR, "oci_la_log_set_id", NULL,
+     0, FLB_TRUE, offsetof(struct flb_oci_logan, oci_la_log_set_id),
+     ""},
     {
-        FLB_CONFIG_MAP_STR, "oci_la_log_source_name", NULL,
-        0, FLB_TRUE, offsetof(struct flb_oci_logan, oci_la_log_source_name),
-        ""
-    },
+     FLB_CONFIG_MAP_STR, "oci_la_entity_id", NULL,
+     0, FLB_TRUE, offsetof(struct flb_oci_logan, oci_la_entity_id),
+     ""},
     {
-        FLB_CONFIG_MAP_STR, "oci_la_log_set_id", NULL,
-        0, FLB_TRUE, offsetof(struct flb_oci_logan, oci_la_log_set_id),
-        ""
-    },
+     FLB_CONFIG_MAP_STR, "oci_la_entity_type", NULL,
+     0, FLB_TRUE, offsetof(struct flb_oci_logan, oci_la_entity_type),
+     ""},
     {
-        FLB_CONFIG_MAP_STR, "oci_la_log_path", NULL,
-        0, FLB_TRUE, offsetof(struct flb_oci_logan, oci_la_log_path),
-        ""
-    },
+     FLB_CONFIG_MAP_STR, "oci_la_log_source_name", NULL,
+     0, FLB_TRUE, offsetof(struct flb_oci_logan, oci_la_log_source_name),
+     ""},
     {
-        FLB_CONFIG_MAP_SLIST_2, "oci_la_global_metadata", NULL,
-        FLB_CONFIG_MAP_MULT, FLB_TRUE, offsetof(struct flb_oci_logan, oci_la_global_metadata),
-            ""
-    },
+     FLB_CONFIG_MAP_STR, "oci_la_log_set_id", NULL,
+     0, FLB_TRUE, offsetof(struct flb_oci_logan, oci_la_log_set_id),
+     ""},
     {
-        FLB_CONFIG_MAP_SLIST_2, "oci_la_metadata", NULL,
-        FLB_CONFIG_MAP_MULT, FLB_TRUE, offsetof(struct flb_oci_logan, oci_la_metadata),
-        ""
-    },
+     FLB_CONFIG_MAP_STR, "oci_la_log_path", NULL,
+     0, FLB_TRUE, offsetof(struct flb_oci_logan, oci_la_log_path),
+     ""},
     {
-        FLB_CONFIG_MAP_STR, "namespace", NULL,
-        0, FLB_TRUE, offsetof(struct flb_oci_logan, namespace),
-            "namespace in your tenancy where the log objects reside"
-    },
+     FLB_CONFIG_MAP_SLIST_2, "oci_la_global_metadata", NULL,
+     FLB_CONFIG_MAP_MULT, FLB_TRUE, offsetof(struct flb_oci_logan,
+                                             oci_la_global_metadata),
+     ""},
     {
-        FLB_CONFIG_MAP_STR, "proxy", NULL,
-        0, FLB_TRUE, offsetof(struct flb_oci_logan, proxy),
-            "define proxy if required, in http://host:port format, supports only http protocol"
-    },
+     FLB_CONFIG_MAP_SLIST_2, "oci_la_metadata", NULL,
+     FLB_CONFIG_MAP_MULT, FLB_TRUE, offsetof(struct flb_oci_logan,
+                                             oci_la_metadata),
+     ""},
+    {
+     FLB_CONFIG_MAP_STR, "namespace", NULL,
+     0, FLB_TRUE, offsetof(struct flb_oci_logan, namespace),
+     "namespace in your tenancy where the log objects reside"},
+    {
+     FLB_CONFIG_MAP_STR, "proxy", NULL,
+     0, FLB_TRUE, offsetof(struct flb_oci_logan, proxy),
+     "define proxy if required, in http://host:port format, supports only http protocol"},
 
     {0}
 };
 
 /* Plugin reference */
 struct flb_output_plugin out_oracle_log_analytics_plugin = {
-    .name           = "oracle_log_analytics",
-    .description    = "Oracle log analytics",
-    .cb_init        = cb_oci_logan_init,
-    .cb_pre_run     = NULL,
-    .cb_flush       = cb_oci_logan_flush,
-    .cb_exit        = cb_oci_logan_exit,
+    .name = "oracle_log_analytics",
+    .description = "Oracle log analytics",
+    .cb_init = cb_oci_logan_init,
+    .cb_pre_run = NULL,
+    .cb_flush = cb_oci_logan_flush,
+    .cb_exit = cb_oci_logan_exit,
 
     /* Configuration */
-    .config_map     = config_map,
+    .config_map = config_map,
 
     /* Events supported */
-    .event_type   = FLB_OUTPUT_LOGS,
+    .event_type = FLB_OUTPUT_LOGS,
 
 
     /* Plugin flags */
-    .flags          = FLB_OUTPUT_NET | FLB_IO_OPT_TLS,
+    .flags = FLB_OUTPUT_NET | FLB_IO_OPT_TLS,
     .workers = 1,
 };
