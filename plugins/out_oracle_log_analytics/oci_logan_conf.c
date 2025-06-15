@@ -264,6 +264,8 @@ static int log_event_metadata_create(struct flb_oci_logan *ctx)
     return 0;
 }
 
+
+// Creates and send HTTP request to oracle IMDS endpoint
 static flb_sds_t make_imds_request(struct flb_oci_logan *ctx,
                                    struct flb_connection *u_conn,
                                    const char *path)
@@ -470,6 +472,7 @@ static const region_realm_mapping_t region_realm_mappings[] = {
     {NULL, NULL}
 };
 
+// Determine the oracle cloud realm code based on region
 static const char *determine_realm_from_region(const char *region)
 {
     if (!region) {
@@ -484,6 +487,8 @@ static const char *determine_realm_from_region(const char *region)
     return "oc1";
 }
 
+
+//gets the domain suffix for a specific oracle cloud realm
 static const char *get_domain_suffix_for_realm(const char *realm)
 {
     if (!realm) {
@@ -498,7 +503,7 @@ static const char *get_domain_suffix_for_realm(const char *realm)
 
     return "oraclecloud.com";
 }
-
+//constructs the complete OCI service hostname
 static flb_sds_t construct_oci_host(const char *service, struct flb_oci_logan *ctx)
 {
     flb_sds_t region = ctx->imds.region;
@@ -535,6 +540,7 @@ const char *long_region_name(char *short_region_name)
     return NULL;
 }
 
+// extracts region information from IMDS HTTP response
 flb_sds_t extract_region(const char *response)
 {
     const char *body_start = strstr(response, "\r\n\r\n");
@@ -567,6 +573,7 @@ flb_sds_t extract_region(const char *response)
     return lregion;
 }
 
+// extracts PEM-formatted content from HTTP response
 char *extract_pem_content(const char *response, const char *begin_marker,
                           const char *end_marker)
 {
@@ -593,6 +600,7 @@ char *extract_pem_content(const char *response, const char *begin_marker,
     return pem_content;
 }
 
+// calculates fingerprint sha1 of X.509 certificate
 flb_sds_t calculate_certificate_fingerprint(struct flb_oci_logan *ctx,
                                             const char *cert_pem)
 {
@@ -647,6 +655,7 @@ flb_sds_t calculate_certificate_fingerprint(struct flb_oci_logan *ctx,
     return fingerprint;
 }
 
+// extracts tenancy OCID from x509 certificate subject
 bool extract_tenancy_ocid(struct flb_oci_logan *ctx, const char *cert_pem)
 {
     BIO *bio = BIO_new_mem_buf(cert_pem, -1);
@@ -743,7 +752,6 @@ int get_keys_and_certs(struct flb_oci_logan *ctx, struct flb_config *config)
     flb_sds_destroy(cert_resp);
 
     ctx->imds.region = clean_region_resp;
-    flb_plg_debug(ctx->ins, "ctx->imds->region %s", ctx->imds.region);
     ctx->imds.leaf_cert = clean_cert_resp;
     ctx->imds.intermediate_cert = int_cert_resp;
     char *pem_start = strstr(key_resp, "-----BEGIN");
@@ -1195,7 +1203,7 @@ static int parse_federation_response(flb_sds_t response,
         return -1;
     }
 
-    flb_sds_t raw_token = flb_sds_create(token_str);    // should be freed later
+    flb_sds_t raw_token = flb_sds_create(token_str);
     if (!raw_token) {
         cJSON_Delete(json);
         return -1;
@@ -1281,8 +1289,6 @@ static int decode_jwt_and_set_expires(struct flb_oci_logan *ctx)
     }
 
     decoded_payload[decoded_len] = '\0';
-    flb_plg_debug(ctx->ins, "decoded payload -> [%s]", decoded_payload);
-    // there was a hbo
     cJSON *json = cJSON_Parse(decoded_payload);
     if (json == NULL) {
         const char *error_ptr = cJSON_GetErrorPtr();
@@ -1309,7 +1315,6 @@ static int decode_jwt_and_set_expires(struct flb_oci_logan *ctx)
     }
 
     time_t exp_value = (time_t) exp_item->valuedouble;
-    flb_plg_debug(ctx->ins, "Found exp value: %ld", (long) exp_value);
     char *json_str = cJSON_Print(json);
     if (json_str) {
         flb_free(json_str);
@@ -1339,7 +1344,6 @@ flb_sds_t sign_and_send_federation_request(struct flb_oci_logan *ctx,
     flb_sds_t url_path = flb_sds_create("/v1/x509");
     flb_sds_t auth_header = NULL;
     flb_sds_t date_header = NULL;
-    flb_plg_debug(ctx->ins, "ctx->imds->region -> %s", ctx->imds.region);
     flb_sds_t tmp_host = construct_oci_host("auth", ctx);
     char *host = flb_calloc(flb_sds_len(tmp_host) + 1, 1);
     time_t now;
@@ -1621,7 +1625,6 @@ struct flb_oci_logan *flb_oci_logan_conf_create(struct flb_output_instance
             return NULL;
         }
     }
-    flb_plg_debug(ctx->ins, "host -> %s", host);
     if (!ctx->uri) {
         if (!ctx->namespace) {
             flb_plg_error(ctx->ins, "Namespace is required");

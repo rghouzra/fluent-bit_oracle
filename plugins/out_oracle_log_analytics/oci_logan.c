@@ -1030,10 +1030,6 @@ static int flush_to_endpoint(struct flb_oci_logan *ctx,
     out_ret = FLB_OK;
 
     http_ret = flb_http_do(c, &b_sent);
-    FILE *p = fopen("flush_to_endpoint.log", "w");
-
-    fprintf(p, "%s\n", c->header_buf);
-    flb_plg_debug(ctx->ins, "do request");
 
     if (http_ret == 0) {
         if (c->resp.status != 200) {
