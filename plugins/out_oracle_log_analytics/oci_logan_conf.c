@@ -796,9 +796,7 @@ int get_keys_and_certs(struct flb_oci_logan *ctx, struct flb_config *config)
     if (int_cert_resp) {
         flb_sds_destroy(int_cert_resp);
     }
-    if (ctx->imds.fingerprint) {
-        flb_sds_destroy(ctx->imds.fingerprint);
-    }
+
     ctx->imds.fingerprint = NULL;
     ctx->imds.intermediate_cert = NULL;
     ctx->imds.leaf_cert = NULL;
@@ -988,8 +986,6 @@ flb_sds_t create_federation_payload(struct flb_oci_logan *ctx)
 
 
 cleanup:
-    flb_free(ctx->imds.leaf_cert);
-    // flb_free(ctx->imds.intermediate_cert);
     flb_sds_destroy(leaf_cert);
     flb_sds_destroy(session_pubkey);
     flb_sds_destroy(intermediate_certs);
@@ -1145,9 +1141,6 @@ static flb_sds_t sign_request_with_key(struct flb_oci_logan *ctx,
     }
     if (lowercase_method) {
         flb_sds_destroy(lowercase_method);
-    }
-    if (ctx->imds.tenancy_ocid) {
-        flb_sds_destroy(ctx->imds.tenancy_ocid);
     }
     flb_plg_debug(ctx->ins, "auth header: %s", auth_header);
 
