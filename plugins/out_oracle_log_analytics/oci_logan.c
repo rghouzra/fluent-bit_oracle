@@ -301,7 +301,7 @@ static int build_headers(struct flb_http_client *c, struct flb_oci_logan *ctx,
         flb_plg_error(ctx->ins, "cannot compose signing string");
         goto error_label;
     }
-
+    flb_http_add_header(c, "opc-retry-token", 15, tmp_sds, flb_sds_len(tmp_sds));
     /* Add content-Type */
     signing_str = add_header_and_signing(c, signing_str,
                                          FLB_OCI_HEADER_CONTENT_TYPE,
@@ -927,7 +927,8 @@ struct flb_http_client *create_oci_signed_request_for_logging(struct
 
     flb_http_add_header(client, "x-content-sha256", 16, content_sha256,
                         strlen(content_sha256));
-
+    
+    flb_http_add_header(client, "opc-retry-token", 15, content_sha256, strlen(content_sha256));
     const char *user_agent = "fluent-bit-oci-plugin/1.0";
     flb_http_add_header(client, "User-Agent", 10, user_agent,
                         strlen(user_agent));
