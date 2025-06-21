@@ -506,7 +506,7 @@ static const char *get_domain_suffix_for_realm(const char *realm)
 //constructs the complete OCI service hostname
 static flb_sds_t construct_oci_host(const char *service, struct flb_oci_logan *ctx)
 {
-    flb_sds_t region = ctx->imds.region;
+    flb_sds_t region = (ctx->imds.region ? ctx->imds.region : ctx->region );
     const char *realm = NULL;
     const char *domain_suffix = NULL;
     if(service && ctx->domain_suffix){
