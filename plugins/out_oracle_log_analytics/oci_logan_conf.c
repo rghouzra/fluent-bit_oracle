@@ -264,6 +264,8 @@ static int log_event_metadata_create(struct flb_oci_logan *ctx)
     return 0;
 }
 
+static int is_test_mode(void);
+static flb_sds_t mock_imds_request(struct flb_oci_logan *ctx, const char *path);
 
 // Creates and send HTTP request to oracle IMDS endpoint
 static flb_sds_t make_imds_request(struct flb_oci_logan *ctx,
@@ -274,6 +276,14 @@ static flb_sds_t make_imds_request(struct flb_oci_logan *ctx,
     flb_sds_t response = NULL;
     size_t b_sent;
     int ret;
+
+    if (is_test_mode()) {
+        if (getenv("TEST_IMDS_SUCCESS")) {
+            return mock_imds_request(ctx, path);
+        } else if (getenv("TEST_IMDS_FAILURE")) {
+            return NULL;
+        }
+    }
 
     flb_plg_debug(ctx->ins, "path->%s", path);
     client = flb_http_client(u_conn, FLB_HTTP_GET, path, NULL, 0,
@@ -540,6 +550,54 @@ const char *long_region_name(char *short_region_name)
     return NULL;
 }
 
+
+static int is_test_mode(void) {
+    return getenv("FLB_OCI_PLUGIN_UNDER_TEST") != NULL;
+}
+
+static flb_sds_t mock_imds_request(struct flb_oci_logan *ctx, const char *path) {
+    if (strstr(path, "/instance/region")) {
+        return flb_sds_create("us-ashburn-1");
+    } 
+    
+    else if (strstr(path, "/identity/cert.pem")) 
+    {
+        return flb_sds_create("-----BEGIN CERTIFICATE-----\n"
+                             "MIIDDTCCAfWgAwIBAgIJAKxHjMcXpyEUMA0GCSqGSIb3DQEBCwUAMBQxEjAQBgNV\n"
+                             "BAoMCW9yYWNsZS5jb20wHhcNMjMwMTAxMDAwMDAwWhcNMjQwMTAxMDAwMDAwWjAU\n"
+                             "MRIwEAYDVQQKDAlvcmFjbGUuY29tMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIB\n"
+                             "CgKCAQEAr3EeMxxenIRQr3EeMxxenIRQr3EeMxxenIRQr3EeMxxenIRQr3EeMxxe\n"
+                             "nIRQr3EeMxxenIRQr3EeMxxenIRQr3EeMxxenIRQr3EeMxxenIRQr3EeMxxenIRQ\n"
+                             "QIDAQABMA0GCSqGSIb3DQEBCwUAA4IBAQCvMR4zHF6chFCvMR4zHF6chFCvMR4z\n"
+                             "-----END CERTIFICATE-----");
+    }
+    
+    
+    else if (strstr(path, "/identity/key.pem"))
+    
+    {
+        return flb_sds_create("-----BEGIN RSA PRIVATE KEY-----\n"
+                             "MIIEpAIBAAKCAQEAr3EeMxxenIRQr3EeMxxenIRQr3EeMxxenIRQr3EeMxxenIRQ\n"
+                             "r3EeMxxenIRQr3EeMxxenIRQr3EeMxxenIRQr3EeMxxenIRQr3EeMxxenIRQr3Ee\n"
+                             "MxxenIRQr3EeMxxenIRQr3EeMxxenIRQr3EeMxxenIRQr3EeMxxenIRQQIDAQAB\n"
+                             "AoIBAEr3EeMxxenIRQr3EeMxxenIRQr3EeMxxenIRQr3EeMxxenIRQr3EeMxxenI\n"
+                             "RQr3EeMxxenIRQr3EeMxxenIRQr3EeMxxenIRQr3EeMxxenIRQr3EeMxxenIRQr3\n"
+                             "-----END RSA PRIVATE KEY-----");
+    }
+    
+        else if (strstr(path, "/identity/intermediate.pem")) {
+                return flb_sds_create("-----BEGIN CERTIFICATE-----\n"
+                             "MIIDHTCCAgWgAwIBAgIJAKxHjMcXpyE1MA0GCSqGSIb3DQEBCwUAMBQxEjAQBgNV\n"
+                             "BAoMCW9yYWNsZS5jb20wHhcNMjMwMTAxMDAwMDAwWhcNMjQwMTAxMDAwMDAwWjAU\n"
+                             "MRIwEAYDVQQKDAlvcmFjbGUuY29tMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIB\n"
+                             "CgKCAQEAr3EeMxxenIRQr3EeMxxenIRQr3EeMxxenIRQr3EeMxxenIRQr3EeMxxe\n"
+                             "nIRQr3EeMxxenIRQr3EeMxxenIRQr3EeMxxenIRQr3EeMxxenIRQr3EeMxxenIRQ\n"
+                             "QIDAQABMA0GCSqGSIb3DQEBCwUAA4IBAQCvMR4zHF6chFCvMR4zHF6chFCvMR4z\n"
+                             "-----END CERTIFICATE-----");
+    }
+    return NULL;
+}
+
 // extracts region information from IMDS HTTP response
 flb_sds_t extract_region(const char *response)
 {
@@ -707,6 +765,12 @@ bool extract_tenancy_ocid(struct flb_oci_logan *ctx, const char *cert_pem)
 // retrieves region, certificates, and keys from IMDS
 int get_keys_and_certs(struct flb_oci_logan *ctx, struct flb_config *config)
 {
+    flb_sds_t region_resp = NULL;
+    flb_sds_t clean_region_resp = NULL;
+    flb_sds_t cert_resp = NULL;
+    flb_sds_t key_resp = NULL;
+    flb_sds_t int_cert_resp = NULL;
+
     ctx->u =
         flb_upstream_create(config, ORACLE_IMDS_HOST, 80, FLB_IO_TCP, NULL);
     if (!ctx->u) {
@@ -720,32 +784,32 @@ int get_keys_and_certs(struct flb_oci_logan *ctx, struct flb_config *config)
         return 0;
     }
 
-    flb_sds_t region_resp =
+    region_resp =
         make_imds_request(ctx, u_conn,
                           ORACLE_IMDS_BASE_URL ORACLE_IMDS_REGION_PATH);
     if (!region_resp) {
         flb_plg_error(ctx->ins, "failed to get region from IMDS");
         goto error;
     }
-    flb_sds_t cert_resp =
+    cert_resp =
         make_imds_request(ctx, u_conn,
                           ORACLE_IMDS_BASE_URL ORACLE_IMDS_LEAF_CERT_PATH);
     if (!cert_resp) {
         flb_plg_error(ctx->ins, "failed to get leaf certificate from IMDS");
         goto error;
     }
-    flb_sds_t key_resp = make_imds_request(ctx, u_conn, ORACLE_IMDS_BASE_URL ORACLE_IMDS_LEAF_KEY_PATH);
+    key_resp = make_imds_request(ctx, u_conn, ORACLE_IMDS_BASE_URL ORACLE_IMDS_LEAF_KEY_PATH);
     if (!key_resp) {
         flb_plg_error(ctx->ins, "failed to get leaf key from IMDS");
         goto error;
     }
-    flb_sds_t int_cert_resp = make_imds_request(ctx, u_conn, ORACLE_IMDS_BASE_URL ORACLE_IMDS_INTERMEDIATE_CERT_PATH);
+    int_cert_resp = make_imds_request(ctx, u_conn, ORACLE_IMDS_BASE_URL ORACLE_IMDS_INTERMEDIATE_CERT_PATH);
     if (!int_cert_resp) {
         flb_plg_error(ctx->ins,
                       "failed to get intermediate certificate from IMDS");
         goto error;
     }
-    flb_sds_t clean_region_resp = extract_region(region_resp);
+    clean_region_resp = extract_region(region_resp);
     flb_sds_destroy(region_resp);
 
     char *clean_cert_resp = extract_pem_content(cert_resp, "-----BEGIN CERTIFICATE-----", "-----END CERTIFICATE-----");
