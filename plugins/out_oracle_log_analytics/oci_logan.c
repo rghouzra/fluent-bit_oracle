@@ -490,6 +490,7 @@ static int retry_error(struct flb_http_client *c, struct flb_oci_logan *ctx)
     error_response = parse_response_error(ctx, c->resp.payload,
                                           c->resp.payload_size);
     if (!error_response) {
+        flb_plg_error(ctx->ins, "failed to parse error response");
         return FLB_FALSE;
     }
 
@@ -552,6 +553,13 @@ static int retry_error(struct flb_http_client *c, struct flb_oci_logan *ctx)
                                 tmp_len) == 0) {
             ret = FLB_TRUE;
         }
+    }
+
+    if(ret == FLB_RETRY) {
+        flb_plg_error(ctx->ins, "HTTP %d: will retry", c->resp.status);
+    }
+    else {
+        flb_plg_error(ctx->ins, "HTTP %d: non retryable error", c->resp.status);
     }
 
     if (error_response->code) {
@@ -674,13 +682,15 @@ static int refresh_security_token_if_needed(struct flb_oci_logan *ctx)
 
     flb_sds_t json_payload = create_federation_payload(ctx);
     if (!json_payload) {
+        flb_plg_error(ctx->ins, "failed to create federation payload for token refresh");
         return -1;
     }
-
+    
     flb_sds_t response = sign_and_send_federation_request(ctx, json_payload);
     flb_sds_destroy(json_payload);
-
+    
     if (!response) {
+        flb_plg_error(ctx->ins, "token refresh failed: federation request");
         return -1;
     }
 
@@ -975,6 +985,9 @@ static int flush_to_endpoint(struct flb_oci_logan *ctx,
     struct flb_http_client *c = NULL;
     struct flb_connection *u_conn;
 
+    if (!payload) {
+        return FLB_ERROR;
+    }
     full_uri = compose_uri(ctx, log_set_id, log_group_id);
     if (!full_uri) {
         flb_plg_error(ctx->ins,
@@ -997,7 +1010,7 @@ static int flush_to_endpoint(struct flb_oci_logan *ctx,
                                                   ctx->ins->host.name,
                                                   ctx->ins->host.port,
                                                   payload,
-                                                  flb_sds_len(payload), &should_retry);
+                                                  (payload ? flb_sds_len(payload) : 0), &should_retry);
         if (!c) {
             flb_plg_error(ctx->ins, "failed to create instance principal client for logging");
             out_ret = should_retry * FLB_RETRY;
@@ -1006,9 +1019,10 @@ static int flush_to_endpoint(struct flb_oci_logan *ctx,
     }
     else {
         c = flb_http_client(u_conn, FLB_HTTP_POST, full_uri, (void *) payload,
-                            flb_sds_len(payload), ctx->ins->host.name,
-                            ctx->ins->host.port, ctx->proxy, 0);
+        flb_sds_len(payload), ctx->ins->host.name,
+        ctx->ins->host.port, ctx->proxy, 0);
         if (!c) {
+            flb_plg_error(ctx->ins, "failed to config file client for logging");
             goto error_label;
         }
         flb_http_allow_duplicated_headers(c, FLB_FALSE);
@@ -1537,6 +1551,7 @@ static int total_flush(struct flb_event_chunk *event_chunk,
                                   map.via.map.ptr[msg].val.via.str.ptr,
                                   map.via.map.ptr[msg].val.via.str.size);
         }
+
         log = -1;
         msg = -1;
     }
@@ -1548,14 +1563,31 @@ static int total_flush(struct flb_event_chunk *event_chunk,
         goto clean_up;
     }
 
+    // char file_name_p[1024];
+    // static int file_name_p_counter = 0;
+    // char file_name_p2[1024];
+    
+    // sprintf(file_name_p,"/tmp/chunk_debug{%d}.log", file_name_p_counter++);
+    // sprintf(file_name_p2,"/tmp/payload_debug{%d}.log", file_name_p_counter);
+    // FILE *fp_p = fopen(file_name_p, "w");
+    // FILE *fp_p2 = fopen(file_name_p2, "w");
     out_buf = flb_msgpack_raw_to_json_sds(mp_sbuf.data, mp_sbuf.size);
-    flb_plg_debug(ctx->ins, "out_buf->[%s]", out_buf);
+    // if(fp_p) {
+    //     for(int i  = 0 ; i < mp_sbuf.size; i++) {
+    //         fprintf(fp_p, "%c", mp_sbuf.data[i]);
+    //     }
+    //     // fprintf(fp_p, "%s\n", out_buf);
+    //     fflush(fp_p);
+    // }
+
+    // if (fp_p2) {
+    //     fprintf(fp_p2, "%s\n", out_buf);
+    // }
     msgpack_sbuffer_destroy(&mp_sbuf);
     flb_log_event_decoder_destroy(&log_decoder);
 
     flb_plg_debug(ctx->ins, "payload=%s", out_buf);
     flb_plg_debug(ctx->ins, "lg_id=%s", log_group_id);
-
     ret = flush_to_endpoint(ctx, out_buf, log_group_id, log_set_id);
     if (ret != FLB_OK) {
         res = FLB_RETRY;
