@@ -1,0 +1,17 @@
+[upstream] KA connection #65 to loganalytics.us-phoenix-1.oci.oraclecloud.com:443 has been disconnected by the remote service
+[2025/07/11 10:23:19] [debug] [upstream] KA connection #62 to loganalytics.us-phoenix-1.oci.oraclecloud.com:443 has been disconnected by the remote service
+[2025/07/11 10:23:20] [debug] [upstream] drop keepalive connection #-1 to loganalytics.us-phoenix-1.oci.oraclecloud.com:443 (keepalive idle timeout)
+[2025/07/11 10:23:20] [debug] [upstream] drop keepalive connection #-1 to loganalytics.us-phoenix-1.oci.oraclecloud.com:443 (keepalive idle timeout)
+
+
+25/07/11 10:25:29] [ info] [output:oracle_log_analytics:oracle_log_analytics.0] log sent to oci   with success
+[2025/07/11 10:25:29] [debug] [upstream] KA connection #65 to loganalytics.us-phoenix-1.oci.oraclecloud.com:443 is now available
+[2025/07/11 10:25:29] [debug] [output:oracle_log_analytics:oracle_log_analytics.0] success
+[2025/07/11 10:25:29] [debug] [out flush] cb_destroy coro_id=86
+[2025/07/11 10:25:29] [debug] [task] destroy task=0x7f4b6818b260 (task_id=1)
+[2025/07/11 10:25:53] [debug] [input:tail:tail.0] scanning path /var/log/dummy.log
+[2025/07/11 10:25:53] [debug] [input:tail:tail.0] scan_blog add(): dismissed: /var/log/dummy.log, inode 2828263
+[2025/07/11 10:25:53] [debug] [input:tail:tail.0] 0 new files found on path '/var/log/dummy.log'
+[2025/07/11 10:25:59] [debug] [upstream] KA connection #64 to loganalytics.us-phoenix-1.oci.oraclecloud.com:443 has been disconnected by the remote service
+[2025/07/11 10:25:59] [debug] [upstream] drop keepalive connection #-1 to loganalytics.us-phoenix-1.oci.oraclecloud.com:443 (keepalive idle timeout)
+[2025/07/11 10:25:59] [debug] [upstream] drop keepalive connection #-1 to loganalytics.us-phoenix-1.oci.oraclecloud.com:443 (keepalive idle timeout)

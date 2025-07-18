@@ -48,7 +48,7 @@ region=us-ashburn-1
 [OUTPUT]
     Name oracle_log_analytics
     Match *
-    auth_mode config_file
+    auth_typr config_file
     config_file_location ~/.oci/config
     profile_name DEFAULT
     namespace your_namespace_name
@@ -65,7 +65,7 @@ region=us-ashburn-1
 [OUTPUT]
     Name oracle_log_analytics
     Match *
-    auth_mode instance_principal
+    auth_type instance_principal
     namespace your_namespace
     oci_la_log_group_id ocid1.loggroup.oc1..aaaaaaaa...
     oci_la_log_source_name "Instance Log Source"
