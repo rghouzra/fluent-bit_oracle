@@ -161,7 +161,10 @@
 #define ORACLE_IMDS_TOKEN_PATH "/opc/v2/instancePrincipal/token"
 
 
+
 #define COUNT_OF_REGION (sizeof(region_mappings) / sizeof(region_mappings[0]) - 1)
+/* for chunking */
+#define MAX_PAYLOAD_SIZE_BYTES (3800000)
 
 #include <fluent-bit/flb_upstream.h>
 #include <fluent-bit/flb_sds.h>

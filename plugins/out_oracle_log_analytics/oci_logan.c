@@ -1464,147 +1464,217 @@ static int get_and_pack_oci_fields_from_record(msgpack_packer *packer,
 
 }
 
+static int send_batch_with_count(struct flb_oci_logan *ctx, 
+                                struct flb_event_chunk *event_chunk,
+                                int start_record, int record_count,
+                                flb_sds_t log_group_id, flb_sds_t log_set_id)
+{
+    msgpack_sbuffer mp_sbuf;
+    msgpack_packer mp_pck;
+    struct flb_log_event_decoder log_decoder;
+    struct flb_log_event log_event;
+    flb_sds_t out_buf = NULL;
+    int ret = 0, current_record = 0;
+    int msg = -1, log = -1, i;
+    msgpack_object map;
+    
+    flb_plg_debug(ctx->ins, "Processing batch: records %d-%d (%d total)", 
+                  start_record, start_record + record_count - 1, record_count);
+    
+    msgpack_sbuffer_init(&mp_sbuf);
+    msgpack_packer_init(&mp_pck, &mp_sbuf, msgpack_sbuffer_write);
+    
+    ret = flb_log_event_decoder_init(&log_decoder, (char *) event_chunk->data, event_chunk->size);
+    if (ret != FLB_EVENT_DECODER_SUCCESS) {
+        msgpack_sbuffer_destroy(&mp_sbuf);
+        return FLB_ERROR;
+    }
+    
+    if (ctx->oci_config_in_record == FLB_FALSE) {        
+        pack_oci_fields(&mp_pck, ctx);
+        log_group_id = ctx->oci_la_log_group_id;
+        log_set_id = ctx->oci_la_log_set_id;
+    } else {
+        for (int skip = 0; skip < start_record; skip++) {
+            if (flb_log_event_decoder_next(&log_decoder, &log_event) != FLB_EVENT_DECODER_SUCCESS) {
+                flb_log_event_decoder_destroy(&log_decoder);
+                msgpack_sbuffer_destroy(&mp_sbuf);
+                return FLB_ERROR;
+            }
+        }
+        
+        if (flb_log_event_decoder_next(&log_decoder, &log_event) == FLB_EVENT_DECODER_SUCCESS) {
+            map = *log_event.body;
+            ret = get_and_pack_oci_fields_from_record(&mp_pck, map, &log_group_id, &log_set_id, ctx);
+            if (ret != 0) {
+                flb_log_event_decoder_destroy(&log_decoder);
+                msgpack_sbuffer_destroy(&mp_sbuf);
+                return FLB_ERROR;
+            }
+        }
+        
+        flb_log_event_decoder_destroy(&log_decoder);
+        ret = flb_log_event_decoder_init(&log_decoder, (char *) event_chunk->data, event_chunk->size);
+        if (ret != FLB_EVENT_DECODER_SUCCESS) {
+            msgpack_sbuffer_destroy(&mp_sbuf);
+            return FLB_ERROR;
+        }
+    }
+    
+    msgpack_pack_str(&mp_pck, FLB_OCI_LOG_RECORDS_SIZE);
+    msgpack_pack_str_body(&mp_pck, FLB_OCI_LOG_RECORDS, FLB_OCI_LOG_RECORDS_SIZE);
+    msgpack_pack_array(&mp_pck, record_count);
+    
+    /* skip to start record */
+    current_record = 0;
+    while (current_record < start_record &&
+           flb_log_event_decoder_next(&log_decoder, &log_event) == FLB_EVENT_DECODER_SUCCESS) {
+        current_record++;
+    }
+    
+    int packed_records = 0;
+    while (packed_records < record_count &&
+           flb_log_event_decoder_next(&log_decoder, &log_event) == FLB_EVENT_DECODER_SUCCESS) {
+
+        map = *log_event.body;
+        int map_size = map.via.map.size;
+
+        /* lookupfor message or log field */
+        msg = -1; 
+        log = -1;
+        for (i = 0; i < map_size; i++) {
+            if (check_config_from_record(map.via.map.ptr[i].key, "message", 7) == FLB_TRUE) {
+                msg = i;
+                break;
+            }
+            if (check_config_from_record(map.via.map.ptr[i].key, "log", 3) == FLB_TRUE) {
+                log = i;
+                break;
+            }
+        }
+
+        /* pack the record content */
+        if (log >= 0) {
+            msgpack_pack_str(&mp_pck, map.via.map.ptr[log].val.via.str.size);
+            msgpack_pack_str_body(&mp_pck, map.via.map.ptr[log].val.via.str.ptr,
+                                  map.via.map.ptr[log].val.via.str.size);
+        } else if (msg >= 0) {
+            msgpack_pack_str(&mp_pck, map.via.map.ptr[msg].val.via.str.size);
+            msgpack_pack_str_body(&mp_pck, map.via.map.ptr[msg].val.via.str.ptr,
+                                  map.via.map.ptr[msg].val.via.str.size);
+        } else {
+            msgpack_pack_str(&mp_pck, 0);
+            msgpack_pack_str_body(&mp_pck, "", 0);
+        }
+
+        packed_records++;
+    }
+
+    flb_log_event_decoder_destroy(&log_decoder);
+
+    out_buf = flb_msgpack_raw_to_json_sds(mp_sbuf.data, mp_sbuf.size);
+    flb_plg_debug(ctx->ins, "out->buf [%s]", out_buf);
+    msgpack_sbuffer_destroy(&mp_sbuf);
+
+    if (!out_buf) {
+        return FLB_ERROR;
+    }
+
+    flb_plg_debug(ctx->ins, "Batch JSON size: %zu bytes", flb_sds_len(out_buf));
+    
+    ret = flush_to_endpoint(ctx, out_buf, log_group_id, log_set_id);
+    flb_sds_destroy(out_buf);
+    
+    return ret;
+}
+
+inline static size_t estimate_record_json_size(msgpack_object_str *str) {
+    return str->size * 1.5 + 10;  /* json encoding and structure*/
+}
 static int total_flush(struct flb_event_chunk *event_chunk,
                        struct flb_output_flush *out_flush,
                        struct flb_input_instance *ins, void *out_context,
                        struct flb_config *config)
 {
     struct flb_oci_logan *ctx = out_context;
-    flb_sds_t out_buf = NULL;
-    int ret = 0, res = FLB_OK, ret1 = 0, i;
-    msgpack_object map;
-    int map_size;
-    msgpack_sbuffer mp_sbuf;
-    msgpack_packer mp_pck;
-    int msg = -1, log = -1;
     struct flb_log_event_decoder log_decoder;
     struct flb_log_event log_event;
-    int num_records;
+    int ret = 0, total_records, i;
+    size_t estimated_total_size = 0;
     flb_sds_t log_group_id = NULL;
     flb_sds_t log_set_id = NULL;
-    int count = 0;
 
-    ret =
-        flb_log_event_decoder_init(&log_decoder, (char *) event_chunk->data,
+    /* intialize decoder for  counting record and estimate size */
+    ret = flb_log_event_decoder_init(&log_decoder, (char *) event_chunk->data,
                                    event_chunk->size);
     if (ret != FLB_EVENT_DECODER_SUCCESS) {
-        flb_plg_error(ctx->ins,
-                      "Log event decoder initialization error : %d", ret);
-        res = FLB_ERROR;
-        goto clean_up;
+        return FLB_ERROR;
     }
-    /* Create temporary msgpack buffer */
-    msgpack_sbuffer_init(&mp_sbuf);
-    msgpack_packer_init(&mp_pck, &mp_sbuf, msgpack_sbuffer_write);
-
-    /* pack oci fields */
-    /* pack_oci_fields(&mp_pck, ctx); */
-
-    num_records = flb_mp_count(event_chunk->data, event_chunk->size);
-    // add checker for size
-    while ((ret = flb_log_event_decoder_next(&log_decoder,
-                                             &log_event)) ==
-           FLB_EVENT_DECODER_SUCCESS) {
-        map = *log_event.body;
-        map_size = map.via.map.size;
-        if (count < 1) {
-            if (ctx->oci_config_in_record == FLB_FALSE) {
-                pack_oci_fields(&mp_pck, ctx);
-                log_group_id = ctx->oci_la_log_group_id;
-                log_set_id = ctx->oci_la_log_set_id;
-            }
-            else {
-                ret1 =
-                    get_and_pack_oci_fields_from_record(&mp_pck, map,
-                                                        &log_group_id,
-                                                        &log_set_id, ctx);
-                if (ret1 != 0) {
-                    break;
-                }
-            }
-            msgpack_pack_str(&mp_pck, FLB_OCI_LOG_RECORDS_SIZE);
-            msgpack_pack_str_body(&mp_pck, FLB_OCI_LOG_RECORDS,
-                                  FLB_OCI_LOG_RECORDS_SIZE);
-            msgpack_pack_array(&mp_pck, num_records);
-            count++;
-        }
-
-        for (i = 0; i < map_size; i++) {
-            if (check_config_from_record(map.via.map.ptr[i].key,
-                                         "message", 7) == FLB_TRUE) {
-                msg = i;
-            }
-            if (check_config_from_record(map.via.map.ptr[i].key,
-                                         "log", 3) == FLB_TRUE) {
-                log = i;
-            }
-        }
-        if (log >= 0) {
-            msgpack_pack_str(&mp_pck, map.via.map.ptr[log].val.via.str.size);
-            msgpack_pack_str_body(&mp_pck,
-                                  map.via.map.ptr[log].val.via.str.ptr,
-                                  map.via.map.ptr[log].val.via.str.size);
-        }
-        else if (msg >= 0) {
-            msgpack_pack_str(&mp_pck, map.via.map.ptr[msg].val.via.str.size);
-            msgpack_pack_str_body(&mp_pck,
-                                  map.via.map.ptr[msg].val.via.str.ptr,
-                                  map.via.map.ptr[msg].val.via.str.size);
-        }
-
-        log = -1;
-        msg = -1;
-    }
-
-    if (ret1 != 0) {
-        res = FLB_ERROR;
-        msgpack_sbuffer_destroy(&mp_sbuf);
-        flb_log_event_decoder_destroy(&log_decoder);
-        goto clean_up;
-    }
-
-    // char file_name_p[1024];
-    // static int file_name_p_counter = 0;
-    // char file_name_p2[1024];
     
-    // sprintf(file_name_p,"/tmp/chunk_debug{%d}.log", file_name_p_counter++);
-    // sprintf(file_name_p2,"/tmp/payload_debug{%d}.log", file_name_p_counter);
-    // FILE *fp_p = fopen(file_name_p, "w");
-    // FILE *fp_p2 = fopen(file_name_p2, "w");
-    out_buf = flb_msgpack_raw_to_json_sds(mp_sbuf.data, mp_sbuf.size);
-    // if(fp_p) {
-    //     for(int i  = 0 ; i < mp_sbuf.size; i++) {
-    //         fprintf(fp_p, "%c", mp_sbuf.data[i]);
-    //     }
-    //     // fprintf(fp_p, "%s\n", out_buf);
-    //     fflush(fp_p);
-    // }
-
-    // if (fp_p2) {
-    //     fprintf(fp_p2, "%s\n", out_buf);
-    // }
-    msgpack_sbuffer_destroy(&mp_sbuf);
+    total_records = flb_mp_count(event_chunk->data, event_chunk->size);
+    
+    while (flb_log_event_decoder_next(&log_decoder, &log_event) == FLB_EVENT_DECODER_SUCCESS) {
+        msgpack_object map = *log_event.body;
+        
+        for (i = 0; i < map.via.map.size; i++) {
+            if (map.via.map.ptr[i].val.type == MSGPACK_OBJECT_STR) {
+                estimated_total_size += estimate_record_json_size(&map.via.map.ptr[i].val.via.str);
+            }
+        }
+    }
     flb_log_event_decoder_destroy(&log_decoder);
+    
+    /* add overhead for json structure */
+    estimated_total_size += 5000;
+    
+    flb_plg_debug(ctx->ins, "Total records: %d, estimated size: %zu bytes", 
+                  total_records, estimated_total_size);
 
-    flb_plg_debug(ctx->ins, "payload=%s", out_buf);
-    flb_plg_debug(ctx->ins, "lg_id=%s", log_group_id);
-    ret = flush_to_endpoint(ctx, out_buf, log_group_id, log_set_id);
-    if (ret != FLB_OK) {
-        res = FLB_RETRY;
-        goto clean_up;
-    }
+    /* check if chunking is needed */
+    static int log_batch_c ;
+    char file_log_batch[1024];
+    sprintf(file_log_batch, "/tmp/log_batch_%d.log", log_batch_c++);
+    FILE *fptr = fopen(file_log_batch, "w");
 
-  clean_up:
-    if (out_buf != NULL) {
-        flb_sds_destroy(out_buf);
+    if (fptr) {
+        fprintf(fptr, "estimated_total_size -> %zu\n", estimated_total_size);
+        fflush(fptr);
     }
-    if (log_group_id != NULL && ctx->oci_config_in_record) {
-        flb_sds_destroy(log_group_id);
+    if (estimated_total_size <= MAX_PAYLOAD_SIZE_BYTES) {
+        flb_plg_info(ctx->ins, "Payload fits in single request, no chunking needed");
+        return send_batch_with_count(ctx, event_chunk, 0, total_records, log_group_id, log_set_id);
     }
-    if (log_set_id != NULL && ctx->oci_config_in_record) {
-        flb_sds_destroy(log_set_id);
+    
+    /* calculate batching parameters */
+    int batches_needed = (estimated_total_size / MAX_PAYLOAD_SIZE_BYTES) + 1;
+    int records_per_batch = total_records / batches_needed;
+    
+    flb_plg_info(ctx->ins, "Chunking required: %d batches, ~%d records per batch", 
+                 batches_needed, records_per_batch);
+    
+    /* send data in batches */
+    int start_record = 0;
+    int remaining_records = total_records;
+    
+    while (remaining_records > 0) {
+        int batch_size = (remaining_records > records_per_batch) ? records_per_batch : remaining_records;
+        
+        ret = send_batch_with_count(ctx, event_chunk, start_record, batch_size, log_group_id, log_set_id);
+        if (ret != FLB_OK) {
+            flb_plg_error(ctx->ins, "Failed to send batch starting at record %d", start_record);
+            return ret;
+        }
+        
+        start_record += batch_size;
+        remaining_records -= batch_size;
+        
+        flb_plg_debug(ctx->ins, "Sent batch, remaining records: %d", remaining_records);
     }
-    return res;
+    
+    flb_plg_info(ctx->ins, "Successfully sent all %d records in %d batches", 
+                 total_records, batches_needed);
+    
+    return FLB_OK;
 }
 
 static void cb_oci_logan_flush(struct flb_event_chunk *event_chunk,
