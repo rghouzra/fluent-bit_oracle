@@ -1631,15 +1631,15 @@ static int total_flush(struct flb_event_chunk *event_chunk,
                   total_records, estimated_total_size);
 
     /* check if chunking is needed */
-    static int log_batch_c ;
-    char file_log_batch[1024];
-    sprintf(file_log_batch, "/tmp/log_batch_%d.log", log_batch_c++);
-    FILE *fptr = fopen(file_log_batch, "w");
+    // static int log_batch_c ;
+    // char file_log_batch[1024];
+    // sprintf(file_log_batch, "/tmp/log_batch_%d.log", log_batch_c++);
+    // FILE *fptr = fopen(file_log_batch, "w");
 
-    if (fptr) {
-        fprintf(fptr, "estimated_total_size -> %zu\n", estimated_total_size);
-        fflush(fptr);
-    }
+    // if (fptr) {
+    //     fprintf(fptr, "estimated_total_size -> %zu\n", estimated_total_size);
+    //     fflush(fptr);
+    // }
     if (estimated_total_size <= MAX_PAYLOAD_SIZE_BYTES) {
         flb_plg_info(ctx->ins, "Payload fits in single request, no chunking needed");
         return send_batch_with_count(ctx, event_chunk, 0, total_records, log_group_id, log_set_id);
