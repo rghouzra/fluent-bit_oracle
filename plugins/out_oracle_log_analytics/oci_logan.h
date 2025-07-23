@@ -295,5 +295,9 @@ struct flb_oci_logan
     EVP_PKEY *session_key_pair;
     struct oci_security_token security_token;
     char *auth_type;
+
+    // dump payload
+    char *payload_files_location;
+    bool dump_payload_file;
 };
 #endif

@@ -974,6 +974,37 @@ struct flb_http_client *create_oci_signed_request_for_logging(struct
     return NULL;
 }
 
+static void dump_payload_to_file(struct flb_oci_logan *ctx, flb_sds_t payload, 
+                                flb_sds_t log_group_id) 
+{
+    if (!ctx->payload_files_location) {
+        flb_plg_error(ctx->ins, "directory path for dumping payloads should be specified");
+        return ;
+    }
+    
+    time_t now = time(NULL);
+    struct tm *tm_info = localtime(&now);
+    char current[64];
+    char filename[1024];
+    FILE *fp;
+    
+    strftime(current, sizeof(current), "%Y%m%d_%H%M%S", tm_info);
+    
+    snprintf(filename, sizeof(filename), "%s/%s_%s.json", 
+             ctx->payload_files_location, log_group_id, current);
+    
+    fp = fopen(filename, "w");
+    if (!fp) {
+        flb_plg_error(ctx->ins, "failed to create dump file: %s", filename);
+        return;
+    }
+    fprintf(fp, "%s", payload);
+    fclose(fp);
+    
+    flb_plg_info(ctx->ins, "payload dumped to: %s", filename);
+    return;
+}
+
 static int flush_to_endpoint(struct flb_oci_logan *ctx,
                              flb_sds_t payload,
                              flb_sds_t log_group_id, flb_sds_t log_set_id)
@@ -984,9 +1015,12 @@ static int flush_to_endpoint(struct flb_oci_logan *ctx,
     flb_sds_t full_uri;
     struct flb_http_client *c = NULL;
     struct flb_connection *u_conn;
-
+    
     if (!payload) {
         return FLB_ERROR;
+    }
+    if (ctx->dump_payload_file) {
+        dump_payload_to_file(ctx, payload, log_group_id);
     }
     full_uri = compose_uri(ctx, log_set_id, log_group_id);
     if (!full_uri) {
@@ -1631,15 +1665,6 @@ static int total_flush(struct flb_event_chunk *event_chunk,
                   total_records, estimated_total_size);
 
     /* check if chunking is needed */
-    // static int log_batch_c ;
-    // char file_log_batch[1024];
-    // sprintf(file_log_batch, "/tmp/log_batch_%d.log", log_batch_c++);
-    // FILE *fptr = fopen(file_log_batch, "w");
-
-    // if (fptr) {
-    //     fprintf(fptr, "estimated_total_size -> %zu\n", estimated_total_size);
-    //     fflush(fptr);
-    // }
     if (estimated_total_size <= MAX_PAYLOAD_SIZE_BYTES) {
         flb_plg_info(ctx->ins, "Payload fits in single request, no chunking needed");
         return send_batch_with_count(ctx, event_chunk, 0, total_records, log_group_id, log_set_id);
@@ -1705,6 +1730,14 @@ static int cb_oci_logan_exit(void *data, struct flb_config *config)
 
 /* Configuration properties map */
 static struct flb_config_map config_map[] = {
+    {
+     FLB_CONFIG_MAP_STR, "dump_payload_file", false,
+     0, FLB_TRUE, offsetof(struct flb_oci_logan, dump_payload_file),
+     "enable dumping payload to local file"},
+    {
+     FLB_CONFIG_MAP_STR, "payload_file_location", NULL,
+     0, FLB_TRUE, offsetof(struct flb_oci_logan, payload_files_location),
+     "location to directory where payload will be dumped"},
     {
      FLB_CONFIG_MAP_STR, "auth_type", "config_file",
      0, FLB_TRUE, offsetof(struct flb_oci_logan, auth_type),
