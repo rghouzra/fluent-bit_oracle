@@ -1319,6 +1319,8 @@ static int get_and_pack_oci_fields_from_record(msgpack_packer *packer,
     msgpack_object *log_source = NULL;
     msgpack_object *global_metadata = NULL;
     msgpack_object *metadata = NULL;
+    char *log_path_value = NULL;
+    int log_path_len = 0;
 
     for (i = 0; i < map_size; i++) {
         if (check_config_from_record(map.via.map.ptr[i].key,
@@ -1696,7 +1698,7 @@ static int total_flush(struct flb_event_chunk *event_chunk,
     /* calculate batching parameters */
     int batches_needed = (estimated_total_size / MAX_PAYLOAD_SIZE_BYTES) + 1;
     int records_per_batch = total_records / batches_needed;
-    
+
     flb_plg_info(ctx->ins, "Chunking required: %d batches, ~%d records per batch", 
                  batches_needed, records_per_batch);
     
@@ -1754,7 +1756,7 @@ static int cb_oci_logan_exit(void *data, struct flb_config *config)
 /* Configuration properties map */
 static struct flb_config_map config_map[] = {
     {
-     FLB_CONFIG_MAP_STR, "dump_payload_file", false,
+     FLB_CONFIG_MAP_BOOL, "dump_payload_file", false,
      0, FLB_TRUE, offsetof(struct flb_oci_logan, dump_payload_file),
      "enable dumping payload to local file"},
     {
