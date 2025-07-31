@@ -78,6 +78,12 @@
 #define FLB_OCI_MATCH_PREFIX "oci_match_"
 #define FLB_OCI_MATCH_PREFIX_SIZE sizeof(FLB_OCI_MATCH_PREFIX)-1
 
+#define FLB_OCI_LOG_TIMEZONE_KEY "oci_la_timezone"
+#define FLB_OCI_LOG_TIMEZONE_KEY_SIZE sizeof(FLB_OCI_LOG_TIMEZONE_KEY) - 1
+
+#define FLB_OCI_LOG_TIMEZONE "timezone"
+#define FLB_OCI_LOG_TIMEZONE_SIZE sizeof(FLB_OCI_LOG_TIMEZONE) - 1
+
 #ifdef FLB_HAVE_REGEX
 #define FLB_OCI_MATCH_REGEX_PREFIX "oci_match_regex_"
 #define FLB_OCI_MATCH_REGEX_PREFIX_SIZE sizeof(FLB_OCI_MATCH_REGEX_PREFIX)-1
@@ -164,7 +170,7 @@
 
 #define COUNT_OF_REGION (sizeof(region_mappings) / sizeof(region_mappings[0]) - 1)
 /* for chunking */
-#define MAX_PAYLOAD_SIZE_BYTES (3800000)
+#define MAX_PAYLOAD_SIZE_BYTES (3800000) // 3.8 mb 
 
 #include <fluent-bit/flb_upstream.h>
 #include <fluent-bit/flb_sds.h>
@@ -273,6 +279,8 @@ struct flb_oci_logan
     flb_sds_t oci_la_log_group_id;
 
     flb_sds_t oci_la_log_set_id;
+
+    flb_sds_t oci_la_timezone;
 
     struct mk_list *oci_la_global_metadata;
     struct mk_list global_metadata_fields;

@@ -39,6 +39,21 @@
 #include "oci_logan.h"
 
 
+static int is_valid_timezone(const char *timezone)
+{
+    if (!timezone ||strlen(timezone)==0) {
+    return 0;}
+    
+    if (strcmp(timezone, "UTC") == 0 || 
+        strcmp(timezone, "GMT") == 0 ||
+        ((timezone[0] == '+' || timezone[0] == '-') && strlen(timezone) >= 3)) {
+        return 1;
+    }
+    
+    return 1;
+}
+
+
 static int check_config_from_record(msgpack_object key, char *name, int len)
 {
     if (key.type != MSGPACK_OBJECT_STR) {
@@ -1229,7 +1244,11 @@ static void pack_oci_fields(msgpack_packer *packer, struct flb_oci_logan *ctx, c
         pck_sz++;
     }
 
-    msgpack_pack_map(packer, pck_sz);   /* entityId, logSourceName, logPath, logRecords */
+    if (ctx->oci_la_timezone) {
+        pck_sz++;
+    }
+
+    msgpack_pack_map(packer, pck_sz);   /* entityId, logSourceName, logPath, logRecords , timezone*/
 
 
     /* "entityType:"" */
@@ -1272,6 +1291,19 @@ static void pack_oci_fields(msgpack_packer *packer, struct flb_oci_logan *ctx, c
                               log_path_len);
     }
 
+    if (ctx->oci_la_timezone) {
+        msgpack_pack_str(packer, FLB_OCI_LOG_TIMEZONE_SIZE);
+        msgpack_pack_str_body(packer, FLB_OCI_LOG_TIMEZONE, FLB_OCI_LOG_TIMEZONE_SIZE);
+        
+        if (!is_valid_timezone(ctx->oci_la_timezone)) {
+            flb_plg_warn(ctx->ins, "invalid timezone %s, using utc", ctx->oci_la_timezone);
+            msgpack_pack_str(packer, 3);
+            msgpack_pack_str_body(packer, "UTC", 3);
+        } else {
+            msgpack_pack_str(packer, flb_sds_len(ctx->oci_la_timezone));
+            msgpack_pack_str_body(packer, ctx->oci_la_timezone, flb_sds_len(ctx->oci_la_timezone));
+        }
+    }
 
     /* Add metadata */
     if (num_event_meta > 0) {
@@ -1307,26 +1339,29 @@ static int get_and_pack_oci_fields_from_record(msgpack_packer *packer,
                                                flb_sds_t *lg_id,
                                                flb_sds_t *ls_id,
                                                struct flb_oci_logan *ctx,
-                                                char *tag, int tag_len)
+                                               char *tag, int tag_len)
 {
     int map_size = map.via.map.size;
-    int pck_size = 1, i;
+    int pck_size = 2, i;
     msgpack_object *log_group_id = NULL;
     msgpack_object *log_set_id = NULL;
+    
     msgpack_object *entity_id = NULL;
     msgpack_object *entity_type = NULL;
+
+
     msgpack_object *log_path = NULL;
+    
     msgpack_object *log_source = NULL;
     msgpack_object *global_metadata = NULL;
     msgpack_object *metadata = NULL;
-    char *log_path_value = NULL;
-    int log_path_len = 0;
+
+    msgpack_object *timezone = NULL;
 
     for (i = 0; i < map_size; i++) {
         if (check_config_from_record(map.via.map.ptr[i].key,
                                      FLB_OCI_LOG_GROUP_ID_KEY,
-                                     FLB_OCI_LOG_GROUP_ID_KEY_SIZE) ==
-            FLB_TRUE) {
+                                     FLB_OCI_LOG_GROUP_ID_KEY_SIZE) == FLB_TRUE) {
             if (map.via.map.ptr[i].val.type == MSGPACK_OBJECT_STR) {
                 log_group_id = &map.via.map.ptr[i].val;
             }
@@ -1334,27 +1369,37 @@ static int get_and_pack_oci_fields_from_record(msgpack_packer *packer,
         }
         else if (check_config_from_record(map.via.map.ptr[i].key,
                                           FLB_OCI_LOG_SET_ID_KEY,
-                                          FLB_OCI_LOG_SET_ID_KEY_SIZE) ==
-                 FLB_TRUE) {
+                                          FLB_OCI_LOG_SET_ID_KEY_SIZE) == FLB_TRUE) {
             if (map.via.map.ptr[i].val.type == MSGPACK_OBJECT_STR) {
                 log_set_id = &map.via.map.ptr[i].val;
             }
             continue;
         }
+
+        else if (check_config_from_record(map.via.map.ptr[i].key,
+                                          FLB_OCI_LOG_TIMEZONE_KEY,
+                                          FLB_OCI_LOG_TIMEZONE_KEY_SIZE) == FLB_TRUE) {
+            if (map.via.map.ptr[i].val.type == MSGPACK_OBJECT_STR) {
+                timezone = &map.via.map.ptr[i].val;
+                pck_size++;
+            }
+            continue;
+        }
+
         else if (check_config_from_record(map.via.map.ptr[i].key,
                                           FLB_OCI_LOG_ENTITY_ID_KEY,
-                                          FLB_OCI_LOG_ENTITY_ID_KEY_SIZE) ==
-                 FLB_TRUE) {
+                                          FLB_OCI_LOG_ENTITY_ID_KEY_SIZE) == FLB_TRUE) {
             if (map.via.map.ptr[i].val.type == MSGPACK_OBJECT_STR) {
                 entity_id = &map.via.map.ptr[i].val;
                 pck_size++;
             }
             continue;
         }
+
+    
         else if (check_config_from_record(map.via.map.ptr[i].key,
                                           FLB_OCI_LOG_ENTITY_TYPE_KEY,
-                                          FLB_OCI_LOG_ENTITY_TYPE_KEY_SIZE) ==
-                 FLB_TRUE) {
+                                          FLB_OCI_LOG_ENTITY_TYPE_KEY_SIZE) == FLB_TRUE) {
             if (map.via.map.ptr[i].val.type == MSGPACK_OBJECT_STR) {
                 entity_type = &map.via.map.ptr[i].val;
                 pck_size++;
@@ -1363,29 +1408,26 @@ static int get_and_pack_oci_fields_from_record(msgpack_packer *packer,
         }
         else if (check_config_from_record(map.via.map.ptr[i].key,
                                           FLB_OCI_LOG_SOURCE_NAME_KEY,
-                                          FLB_OCI_LOG_SOURCE_NAME_KEY_SIZE) ==
-                 FLB_TRUE) {
+                                          FLB_OCI_LOG_SOURCE_NAME_KEY_SIZE) == FLB_TRUE) {
             if (map.via.map.ptr[i].val.type == MSGPACK_OBJECT_STR) {
                 log_source = &map.via.map.ptr[i].val;
-                pck_size++;
             }
             continue;
         }
         else if (check_config_from_record(map.via.map.ptr[i].key,
                                           FLB_OCI_LOG_PATH_KEY,
-                                          FLB_OCI_LOG_PATH_KEY_SIZE) ==
-                 FLB_TRUE) {
+                                          FLB_OCI_LOG_PATH_KEY_SIZE) == FLB_TRUE) {
             if (map.via.map.ptr[i].val.type == MSGPACK_OBJECT_STR) {
                 log_path = &map.via.map.ptr[i].val;
                 pck_size++;
             }
             continue;
         }
+
         else if (check_config_from_record(map.via.map.ptr[i].key,
                                           FLB_OCI_METADATA_KEY,
-                                          FLB_OCI_METADATA_KEY_SIZE) ==
-                 FLB_TRUE) {
-            if (map.via.map.ptr[i].val.type == MSGPACK_OBJECT_STR) {
+                                          FLB_OCI_METADATA_KEY_SIZE) == FLB_TRUE) {
+            if (map.via.map.ptr[i].val.type == MSGPACK_OBJECT_MAP) {
                 metadata = &map.via.map.ptr[i].val;
                 pck_size++;
             }
@@ -1393,9 +1435,8 @@ static int get_and_pack_oci_fields_from_record(msgpack_packer *packer,
         }
         else if (check_config_from_record(map.via.map.ptr[i].key,
                                           FLB_OCI_GLOBAL_METADATA_KEY,
-                                          FLB_OCI_GLOBAL_METADATA_KEY_SIZE) ==
-                 FLB_TRUE) {
-            if (map.via.map.ptr[i].val.type == MSGPACK_OBJECT_STR) {
+                                          FLB_OCI_GLOBAL_METADATA_KEY_SIZE) == FLB_TRUE) {
+            if (map.via.map.ptr[i].val.type == MSGPACK_OBJECT_MAP) {
                 global_metadata = &map.via.map.ptr[i].val;
             }
             continue;
@@ -1403,18 +1444,19 @@ static int get_and_pack_oci_fields_from_record(msgpack_packer *packer,
     }
 
     if (log_group_id == NULL || log_source == NULL) {
-        flb_plg_error(ctx->ins,
-                      "log source name and log group id are required");
+        flb_plg_error(ctx->ins, "log source name and log group id are required");
         return -1;
     }
+
     if (global_metadata != NULL) {
         msgpack_pack_map(packer, 2);
         msgpack_pack_str(packer, FLB_OCI_LOG_METADATA_SIZE);
-        msgpack_pack_str_body(packer, FLB_OCI_LOG_METADATA,
-                              FLB_OCI_LOG_METADATA_SIZE);
-
+        msgpack_pack_str_body(packer, FLB_OCI_LOG_METADATA, FLB_OCI_LOG_METADATA_SIZE);
         msgpack_pack_object(packer, *global_metadata);
     }
+
+
+
     else {
         msgpack_pack_map(packer, 1);
     }
@@ -1440,74 +1482,85 @@ static int get_and_pack_oci_fields_from_record(msgpack_packer *packer,
      }
      ]
      */
-    msgpack_pack_str(packer, FLB_OCI_LOG_EVENTS_SIZE);
-    msgpack_pack_str_body(packer, FLB_OCI_LOG_EVENTS,
-                          FLB_OCI_LOG_EVENTS_SIZE);
 
+    msgpack_pack_str(packer, FLB_OCI_LOG_EVENTS_SIZE);
+    msgpack_pack_str_body(packer, FLB_OCI_LOG_EVENTS, FLB_OCI_LOG_EVENTS_SIZE);
     msgpack_pack_array(packer, 1);
 
-    if (metadata != NULL) {
-        pck_size++;
-        msgpack_pack_map(packer, pck_size);     /* entityType, entityId, logSourceName, logPath, metadata, logRecords */
-        msgpack_pack_str(packer, FLB_OCI_LOG_METADATA_SIZE);
-        msgpack_pack_str_body(packer, FLB_OCI_LOG_METADATA,
-                              FLB_OCI_LOG_METADATA_SIZE);
-        msgpack_pack_object(packer, *global_metadata);
+    msgpack_pack_map(packer, pck_size);
 
-    }
-    else {
-        msgpack_pack_map(packer, pck_size);     /* entityType, entityId, logSourceName, logPath, logRecords */
-    }
+    msgpack_pack_str(packer, FLB_OCI_LOG_SOURCE_NAME_SIZE);
+    msgpack_pack_str_body(packer, FLB_OCI_LOG_SOURCE_NAME, FLB_OCI_LOG_SOURCE_NAME_SIZE);
+    msgpack_pack_object(packer, *log_source);
 
-    /* "entityType:"" */
+
+
     if (entity_type) {
         msgpack_pack_str(packer, FLB_OCI_ENTITY_TYPE_SIZE);
-        msgpack_pack_str_body(packer, FLB_OCI_ENTITY_TYPE,
-                              FLB_OCI_ENTITY_TYPE_SIZE);
+        msgpack_pack_str_body(packer, FLB_OCI_ENTITY_TYPE, FLB_OCI_ENTITY_TYPE_SIZE);
         msgpack_pack_object(packer, *entity_type);
     }
 
-    /* "entityId":"", */
-    if (entity_type) {
+
+
+
+    if (entity_id) {
         msgpack_pack_str(packer, FLB_OCI_ENTITY_ID_SIZE);
-        msgpack_pack_str_body(packer, FLB_OCI_ENTITY_ID,
-                              FLB_OCI_ENTITY_ID_SIZE);
+        msgpack_pack_str_body(packer, FLB_OCI_ENTITY_ID, FLB_OCI_ENTITY_ID_SIZE);
         msgpack_pack_object(packer, *entity_id);
     }
 
 
 
-    /* "logSourceName":"", */
-    msgpack_pack_str(packer, FLB_OCI_LOG_SOURCE_NAME_SIZE);
-    msgpack_pack_str_body(packer, FLB_OCI_LOG_SOURCE_NAME,
-                          FLB_OCI_LOG_SOURCE_NAME_SIZE);
-    msgpack_pack_object(packer, *log_source);
-
-
-    /* "logPath":"" */
     if (log_path) {
         msgpack_pack_str(packer, FLB_OCI_LOG_PATH_SIZE);
-        msgpack_pack_str_body(packer, FLB_OCI_LOG_PATH,
-                              FLB_OCI_LOG_PATH_SIZE);
+        msgpack_pack_str_body(packer, FLB_OCI_LOG_PATH, FLB_OCI_LOG_PATH_SIZE);
         msgpack_pack_object(packer, *log_path);
     }
 
-    *lg_id =
-        flb_sds_create_len(log_group_id->via.str.ptr,
-                           log_group_id->via.str.size);
+
+    if (timezone) {
+        char tz_str[256];
+        int tz_len = timezone->via.str.size;
+        if (tz_len >= sizeof(tz_str)) {
+            tz_len = sizeof(tz_str) - 1;
+        }
+        strncpy(tz_str, timezone->via.str.ptr, tz_len);
+        tz_str[tz_len] = '\0';
+        
+        msgpack_pack_str(packer, FLB_OCI_LOG_TIMEZONE_SIZE);
+        msgpack_pack_str_body(packer, FLB_OCI_LOG_TIMEZONE, FLB_OCI_LOG_TIMEZONE_SIZE);
+        
+        if (!is_valid_timezone(tz_str)) {
+            flb_plg_warn(ctx->ins, "Invalid timezone '%s' in record, using UTC", tz_str);
+            msgpack_pack_str(packer, 3);
+            msgpack_pack_str_body(packer, "UTC", 3);
+        } else {
+            msgpack_pack_object(packer, *timezone);
+        }
+    }
+
+
+    if (metadata) {
+        msgpack_pack_str(packer, FLB_OCI_LOG_METADATA_SIZE);
+        msgpack_pack_str_body(packer, FLB_OCI_LOG_METADATA, FLB_OCI_LOG_METADATA_SIZE);
+        msgpack_pack_object(packer, *metadata);
+    }
+
+
+    *lg_id = flb_sds_create_len(log_group_id->via.str.ptr, log_group_id->via.str.size);
     if (!*lg_id) {
         return -1;
     }
+    
     if (log_set_id != NULL) {
-        *ls_id =
-            flb_sds_create_len(log_set_id->via.str.ptr,
-                               log_set_id->via.str.size);
+        *ls_id = flb_sds_create_len(log_set_id->via.str.ptr, log_set_id->via.str.size);
         if (!*ls_id) {
             return -1;
         }
     }
+    
     return 0;
-
 }
 
 static int send_batch_with_count(struct flb_oci_logan *ctx, 
@@ -1833,7 +1886,10 @@ static struct flb_config_map config_map[] = {
      FLB_CONFIG_MAP_STR, "proxy", NULL,
      0, FLB_TRUE, offsetof(struct flb_oci_logan, proxy),
      "define proxy if required, in http://host:port format, supports only http protocol"},
-
+    {
+     FLB_CONFIG_MAP_STR, "oci_la_timezone", NULL,
+     0, FLB_TRUE, offsetof(struct flb_oci_logan, oci_la_timezone),
+     "timezone for logs(UTC, GMT, +05:30)"},
     {0}
 };
 

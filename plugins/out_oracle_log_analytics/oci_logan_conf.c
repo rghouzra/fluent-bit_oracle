@@ -1557,9 +1557,9 @@ struct flb_oci_logan *flb_oci_logan_conf_create(struct flb_output_instance
     }
     mk_list_init(&ctx->global_metadata_fields);
     mk_list_init(&ctx->log_event_metadata_fields);
-
+    
     ctx->ins = ins;
-
+    
     ret = flb_output_config_map_set(ins, (void *) ctx);
     if (ret == -1) {
         flb_plg_error(ctx->ins, "configuration error");
@@ -1827,6 +1827,10 @@ int flb_oci_logan_conf_destroy(struct flb_oci_logan *ctx)
     }
     if (ctx->u) {
         flb_upstream_destroy(ctx->u);
+    }
+
+    if (ctx->oci_la_timezone) {
+        flb_sds_destroy(ctx->oci_la_timezone);
     }
 
     metadata_fields_destroy(ctx);
