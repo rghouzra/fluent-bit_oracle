@@ -94,6 +94,38 @@ static int create_pk_context(flb_sds_t filepath, const char *key_passphrase,
     return 0;
 }
 
+static char *trim_whitespace(const char *str)
+{
+    const char *start = str;
+    const char *end;
+    char *trimmed;
+    size_t len;
+    if (!str || *str == '\0') {
+        return NULL;
+    }
+    while (*start && (*start == ' ' || *start == '\t' || *start == '\n')) {
+        start++;
+    }
+    if (*start == '\0') {
+        return NULL;
+    }
+    end = start + strlen(start) - 1;
+    while (end > start && (*end == ' ' || *end == '\t' || *end == '\n')) {
+        end--;
+    }
+
+    len = end - start + 1;
+    trimmed = flb_malloc(len + 1);
+    if (!trimmed) {
+        return NULL;
+    }
+
+    strncpy(trimmed, start, len);
+    trimmed[len] = '\0';
+
+    return trimmed;
+}
+
 static int load_oci_credentials(struct flb_oci_logan *ctx)
 {
     flb_sds_t content;
@@ -101,7 +133,9 @@ static int load_oci_credentials(struct flb_oci_logan *ctx)
     char *line, *profile = NULL;
     int eq_pos = 0;
     char *key = NULL;
-    char *val;
+    char *val = NULL;
+    char *trimmed_key = NULL;
+    char *trimmed_val = NULL;
 
     content = flb_file_read(ctx->config_file_location);
     if (content == NULL || flb_sds_len(content) == 0) {
@@ -135,6 +169,8 @@ static int load_oci_credentials(struct flb_oci_logan *ctx)
                 res = -1;
                 break;
             }
+            key = trim_whitespace(key);
+            val = trim_whitespace(val);
             if (strcmp(key, FLB_OCI_PARAM_USER) == 0) {
                 ctx->user = flb_sds_create(val);
             }
