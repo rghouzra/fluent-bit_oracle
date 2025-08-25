@@ -198,6 +198,8 @@
 #include <openssl/x509.h>
 #include <openssl/rsa.h>
 #include <openssl/pem.h>
+#include <msgpack.h>
+#include <string.h>
 
 struct metadata_obj
 {
@@ -308,4 +310,6 @@ struct flb_oci_logan
     char *payload_files_location;
     bool dump_payload_file;
 };
+
+int is_valid_timezone(const char *timezone);
 #endif
