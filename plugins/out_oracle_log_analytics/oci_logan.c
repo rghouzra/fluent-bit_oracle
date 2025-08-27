@@ -955,12 +955,92 @@ struct flb_http_client *create_oci_signed_request_for_logging(struct
     return NULL;
 }
 
-static void dump_payload_to_file(struct flb_oci_logan *ctx, flb_sds_t payload, 
-                                flb_sds_t log_group_id) 
+static struct flb_hash_table *oci_dump_payload_hash = NULL;
+
+int init_dump_payload_hash() {
+    if (oci_dump_payload_hash) {
+        return 1;
+    }
+    oci_dump_payload_hash = flb_hash_table_create(FLB_HASH_TABLE_EVICT_RANDOM, 
+                                                  1024, 10000);
+    if (!oci_dump_payload_hash) {
+        return 0;
+    }
+    return 1;
+}
+
+void cleanup_dump_payload_hash(void) {
+    if (oci_dump_payload_hash) {
+        flb_hash_table_destroy(oci_dump_payload_hash);
+        oci_dump_payload_hash = NULL;
+    }
+}
+
+int add_hash_to_table(const char *content_hash, bool *already_exists) {
+    void *out_buf = NULL;
+    size_t out_size = 0;
+    int ret;
+    
+    if (!oci_dump_payload_hash || !content_hash || !already_exists) {
+        return -1;
+    }
+    *already_exists = false;
+    
+    ret = flb_hash_table_get(oci_dump_payload_hash, content_hash, strlen(content_hash),
+                            &out_buf, &out_size);
+    if (ret == 0) {
+        *already_exists = true;
+        return 0;
+    }
+
+    time_t now = time(NULL);
+    ret = flb_hash_table_add(oci_dump_payload_hash, content_hash, strlen(content_hash),
+                            &now, sizeof(time_t));
+    if (ret == -1) {
+        return -1;
+    }
+    
+    return 0;
+}
+
+bool payload_already_dumped(flb_sds_t payload) {
+    bool already_exists = false;
+    
+    if (!payload || !oci_dump_payload_hash) {
+        return false;
+    }
+    
+    size_t payload_size = flb_sds_len(payload);
+    char *content_sha256 = calculate_content_sha256_b64(payload, payload_size);
+    
+    if (!content_sha256) {
+        return false;
+    }
+    
+    int ret = add_hash_to_table(content_sha256, &already_exists);
+
+    if (content_sha256) {
+        free(content_sha256);
+    }
+    
+    if (ret == -1) {
+        return false;
+    }
+    
+    return already_exists;
+}
+
+static void dump_payload_to_file(struct flb_oci_logan *ctx, flb_sds_t payload,
+                                flb_sds_t log_group_id)
 {
     if (!ctx->payload_files_location) {
         flb_plg_error(ctx->ins, "directory path for dumping payloads should be specified");
-        return ;
+        return;
+    }
+    
+    if (payload_already_dumped(payload)) {
+        flb_plg_debug(ctx->ins, "payload already dumped, skipping");
+        return;
     }
     
     time_t now = time(NULL);
@@ -970,20 +1050,28 @@ static void dump_payload_to_file(struct flb_oci_logan *ctx, flb_sds_t payload,
     FILE *fp;
     
     strftime(current, sizeof(current), "%Y%m%d_%H%M%S", tm_info);
-    
-    snprintf(filename, sizeof(filename), "%s/%s_%s.json", 
+    snprintf(filename, sizeof(filename), "%s/%s_%s.json",
              ctx->payload_files_location, log_group_id, current);
+    
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    snprintf(filename, sizeof(filename), "%s/%s_%s_%06d.json",
+             ctx->payload_files_location, log_group_id, current, tv.tv_usec);
+    
+    if (access(filename, F_OK) == 0) {
+        flb_plg_warn(ctx->ins, "file already exists: %s", filename);
+        return;
+    }
     
     fp = fopen(filename, "w");
     if (!fp) {
         flb_plg_error(ctx->ins, "failed to create dump file: %s", filename);
         return;
     }
+    
     fprintf(fp, "%s", payload);
     fclose(fp);
-    
     flb_plg_info(ctx->ins, "payload dumped to: %s", filename);
-    return;
 }
 
 static int flush_to_endpoint(struct flb_oci_logan *ctx,
