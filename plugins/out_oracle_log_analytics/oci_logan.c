@@ -20,6 +20,8 @@
 #include "oci_logan_conf.h"
 #include "oci_logan.h"
 
+int init_dump_payload_hash();
+
 static int check_config_from_record(msgpack_object key, char *name, int len)
 {
     if (key.type != MSGPACK_OBJECT_STR) {
@@ -563,6 +565,9 @@ static int cb_oci_logan_init(struct flb_output_instance *ins,
         flb_plg_error(ins, "cannot initialize plugin");
         return -1;
     }
+    if (!init_dump_payload_hash()) {
+        flb_plg_error(ins, "failed to init  dump payload hash tabe");
+    }
     flb_plg_info(ins, "initialized logan plugin");
     flb_output_set_context(ins, ctx);
     flb_output_set_http_debug_callbacks(ins);
@@ -1003,43 +1008,88 @@ int add_hash_to_table(const char *content_hash, bool *already_exists) {
     return 0;
 }
 
-bool payload_already_dumped(flb_sds_t payload) {
-    bool already_exists = false;
+// bool payload_already_dumped(flb_sds_t payload) {
+//     bool already_exists = false;
     
+//     if (!payload || !oci_dump_payload_hash) {
+//         return false;
+//     }
+    
+//     size_t payload_size = flb_sds_len(payload);
+//     char *content_sha256 = calculate_content_sha256_b64(payload, payload_size);
+    
+//     if (!content_sha256) {
+//         return false;
+//     }
+    
+//     int ret = add_hash_to_table(content_sha256, &already_exists);
+
+//     if (content_sha256) {
+//         flb_free(content_sha256);
+//     }
+    
+//     if (ret == -1) {
+//         return false;
+//     }
+    
+//     return already_exists;
+// }
+
+bool payload_already_exists_in_hash(flb_sds_t payload) {
     if (!payload || !oci_dump_payload_hash) {
         return false;
+    }
+    
+    size_t payload_size = flb_sds_len(payload);
+
+
+    char *content_sha256 = calculate_content_sha256_b64(payload, payload_size);
+    
+    if (!content_sha256) {
+    
+        return false;
+    }
+    
+    void *out_buf = NULL;
+    
+    size_t out_size = 0;
+    int ret = flb_hash_table_get(oci_dump_payload_hash, content_sha256, strlen(content_sha256),&out_buf, &out_size);
+    
+    flb_free(content_sha256);
+    return (ret == 0);
+}
+
+void add_payload_to_hash(flb_sds_t payload) {
+    
+    
+    if (!payload || !oci_dump_payload_hash) {
+        return;
     }
     
     size_t payload_size = flb_sds_len(payload);
     char *content_sha256 = calculate_content_sha256_b64(payload, payload_size);
     
     if (!content_sha256) {
-        return false;
+        return;
     }
     
-    int ret = add_hash_to_table(content_sha256, &already_exists);
-
-    if (content_sha256) {
-        free(content_sha256);
-    }
+    time_t now = time(NULL);
+    flb_hash_table_add(oci_dump_payload_hash, content_sha256, strlen(content_sha256),
+                      &now, sizeof(time_t));
     
-    if (ret == -1) {
-        return false;
-    }
-    
-    return already_exists;
+    flb_free(content_sha256);
 }
 
 static void dump_payload_to_file(struct flb_oci_logan *ctx, flb_sds_t payload,
                                 flb_sds_t log_group_id)
 {
     if (!ctx->payload_files_location) {
-        flb_plg_error(ctx->ins, "directory path for dumping payloads should be specified");
+        flb_plg_error(ctx->ins, "directory path for dumping should be specified");
         return;
     }
     
-    if (payload_already_dumped(payload)) {
-        flb_plg_debug(ctx->ins, "payload already dumped, skipping");
+    if (payload_already_exists_in_hash(payload)) {
+        flb_plg_debug(ctx->ins, "payload already dumped");
         return;
     }
     
@@ -1059,7 +1109,7 @@ static void dump_payload_to_file(struct flb_oci_logan *ctx, flb_sds_t payload,
              ctx->payload_files_location, log_group_id, current, tv.tv_usec);
     
     if (access(filename, F_OK) == 0) {
-        flb_plg_warn(ctx->ins, "file already exists: %s", filename);
+        flb_plg_warn(ctx->ins, "dump file already exists: %s", filename);
         return;
     }
     
@@ -1071,6 +1121,7 @@ static void dump_payload_to_file(struct flb_oci_logan *ctx, flb_sds_t payload,
     
     fprintf(fp, "%s", payload);
     fclose(fp);
+    add_payload_to_hash(payload);
     flb_plg_info(ctx->ins, "payload dumped to: %s", filename);
 }
 
@@ -1856,6 +1907,7 @@ static int cb_oci_logan_exit(void *data, struct flb_config *config)
 {
     struct flb_oci_logan *ctx = data;
 
+    cleanup_dump_payload_hash();
     flb_oci_logan_conf_destroy(ctx);
     return 0;
 }
