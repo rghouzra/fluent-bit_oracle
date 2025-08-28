@@ -1081,47 +1081,38 @@ void add_payload_to_hash(flb_sds_t payload) {
 }
 
 static void dump_payload_to_file(struct flb_oci_logan *ctx, flb_sds_t payload,
-                                flb_sds_t log_group_id)
+    flb_sds_t log_group_id)
 {
     if (!ctx->payload_files_location) {
         flb_plg_error(ctx->ins, "directory path for dumping should be specified");
         return;
     }
     
-    if (payload_already_exists_in_hash(payload)) {
-        flb_plg_debug(ctx->ins, "payload already dumped");
+    size_t payload_size = flb_sds_len(payload);
+    char *content_sha256 = calculate_content_sha256_b64(payload, payload_size);
+    if (!content_sha256) {
         return;
     }
-    
-    time_t now = time(NULL);
-    struct tm *tm_info = localtime(&now);
-    char current[64];
     char filename[1024];
-    FILE *fp;
-    
-    strftime(current, sizeof(current), "%Y%m%d_%H%M%S", tm_info);
-    snprintf(filename, sizeof(filename), "%s/%s_%s.json",
-             ctx->payload_files_location, log_group_id, current);
-    
-    struct timeval tv;
-    gettimeofday(&tv, NULL);
-    snprintf(filename, sizeof(filename), "%s/%s_%s_%06d.json",
-             ctx->payload_files_location, log_group_id, current, tv.tv_usec);
+    snprintf(filename, sizeof(filename), "%s/%s_%.12s.json",
+             ctx->payload_files_location, log_group_id, content_sha256);
     
     if (access(filename, F_OK) == 0) {
-        flb_plg_warn(ctx->ins, "dump file already exists: %s", filename);
+        flb_plg_debug(ctx->ins, "payload s already dumped to->%s", filename);
+        flb_free(content_sha256);
         return;
     }
     
-    fp = fopen(filename, "w");
+    FILE *fp = fopen(filename, "w");
     if (!fp) {
-        flb_plg_error(ctx->ins, "failed to create dump file: %s", filename);
+        flb_free(content_sha256);
         return;
     }
     
     fprintf(fp, "%s", payload);
     fclose(fp);
-    add_payload_to_hash(payload);
+    flb_free(content_sha256);
+    
     flb_plg_info(ctx->ins, "payload dumped to: %s", filename);
 }
 
