@@ -313,6 +313,8 @@ static flb_sds_t make_imds_request(struct flb_oci_logan *ctx,
     size_t b_sent;
     int ret;
 
+
+    // should be removed
     if (is_test_mode()) {
         if (getenv("TEST_IMDS_SUCCESS")) {
             return mock_imds_request(ctx, path);
@@ -566,7 +568,7 @@ static flb_sds_t construct_oci_host(const char *service, struct flb_oci_logan *c
     realm = determine_realm_from_region(region);
     domain_suffix = get_domain_suffix_for_realm(realm);
 
-CONSTRUCT_HOST:
+CONSTRUCT_HOST: ;
     flb_sds_t host = flb_sds_create_size(256);
     if (!host) {
         return NULL;
