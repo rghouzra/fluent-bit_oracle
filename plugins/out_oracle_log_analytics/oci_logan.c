@@ -636,6 +636,11 @@ static flb_sds_t compose_uri(struct flb_oci_logan *ctx,
     full_uri =
         flb_sds_create_size(flb_sds_len(ctx->uri) + 1 +
                             flb_sds_len(uri_param));
+    // static int i ;
+    // char sss[1025];
+    // sprintf(sss, "/tmp/debug.logset{%d}.log", i++);
+    // FILE *FP = fopen(sss, "w");
+    
     if (!full_uri) {
         flb_errno();
         flb_sds_destroy(uri_param);
@@ -645,7 +650,8 @@ static flb_sds_t compose_uri(struct flb_oci_logan *ctx,
     flb_sds_cat_safe(&full_uri, ctx->uri, flb_sds_len(ctx->uri));
     flb_sds_cat_safe(&full_uri, "?", 1);
     flb_sds_cat_safe(&full_uri, uri_param, flb_sds_len(uri_param));
-
+    // fprintf(FP, "Full uri -> %s\tlogset->%s\n", full_uri, log_set);
+    // fflush(FP);
     flb_sds_destroy(uri_param);
 
     return full_uri;
@@ -1430,6 +1436,45 @@ static void pack_oci_fields(msgpack_packer *packer, struct flb_oci_logan *ctx, c
     }
 }
 
+static int check_metadata_dot_notation(msgpack_object key, char **metadata_key) {
+    if (key.type != MSGPACK_OBJECT_STR) {
+        return FLB_FALSE;
+    }
+    
+    if (key.via.str.size <= FLB_OCI_METADATA_KEY_SIZE + 1) {
+        return FLB_FALSE;
+    }
+    
+    if (memcmp(key.via.str.ptr, FLB_OCI_METADATA_KEY, FLB_OCI_METADATA_KEY_SIZE) != 0) {
+        return FLB_FALSE;
+    }
+    
+    if (key.via.str.ptr[FLB_OCI_METADATA_KEY_SIZE] != '.') {
+        return FLB_FALSE;
+    }
+    int meta_key_start = FLB_OCI_METADATA_KEY_SIZE + 1;
+    int meta_key_len = key.via.str.size - meta_key_start;
+    // char *json_output = flb_calloc(1024, 2);
+    // flb_msgpack_to_json (json_output ,key.via.str.size, key.via.str.ptr)
+
+    // msgpack_object_print_buffer(json_output,1000, key);
+    // fprintf(stderr, " meta_key_start -> %s\n", json_output + meta_key_start);
+    // fflush(stderr);
+    if (meta_key_len <= 0) {
+        return FLB_FALSE;
+    }
+    
+    *metadata_key = flb_malloc(meta_key_len + 1);
+    if (!*metadata_key) {
+               return FLB_FALSE;
+     }
+    
+    memcpy(*metadata_key, key.via.str.ptr + meta_key_start, meta_key_len);
+    (*metadata_key)[meta_key_len] = '\0';
+
+    return FLB_TRUE;
+}
+
 static int get_and_pack_oci_fields_from_record(msgpack_packer *packer,
                                                msgpack_object map,
                                                flb_sds_t *lg_id,
@@ -1455,6 +1500,14 @@ static int get_and_pack_oci_fields_from_record(msgpack_packer *packer,
 
     char *log_path_value = NULL;
     int log_path_len = 0;
+    
+    //handling metadata
+    struct mk_list dot_metadata_list;
+    struct metadata_obj *dot_meta_obj;
+    char *dot_meta_key;
+    int has_dot_metadata = 0;
+
+    mk_list_init(&dot_metadata_list);
 
     for (i = 0; i < map_size; i++) {
         if (check_config_from_record(map.via.map.ptr[i].key,
@@ -1527,8 +1580,28 @@ static int get_and_pack_oci_fields_from_record(msgpack_packer *packer,
                                           FLB_OCI_METADATA_KEY_SIZE) == FLB_TRUE) {
             if (map.via.map.ptr[i].val.type == MSGPACK_OBJECT_MAP) {
                 metadata = &map.via.map.ptr[i].val;
-                pck_size++;
+                // pck_size++;
             }
+            continue;
+        }
+        else if (check_metadata_dot_notation(map.via.map.ptr[i].key, &dot_meta_key) == FLB_TRUE) {
+            if (map.via.map.ptr[i].val.type == MSGPACK_OBJECT_STR) {
+                dot_meta_obj = flb_malloc(sizeof(struct metadata_obj));
+                if (dot_meta_obj) {
+                    dot_meta_obj->key = flb_sds_create(dot_meta_key);
+                    dot_meta_obj->val = flb_sds_create_len(map.via.map.ptr[i].val.via.str.ptr,
+                                                          map.via.map.ptr[i].val.via.str.size);
+                    if (dot_meta_obj->key && dot_meta_obj->val) {
+                        mk_list_add(&dot_meta_obj->_head, &dot_metadata_list);
+                        has_dot_metadata = 1;
+                    } else {
+                        if (dot_meta_obj->key) flb_sds_destroy(dot_meta_obj->key);
+                        if (dot_meta_obj->val) flb_sds_destroy(dot_meta_obj->val);
+                        flb_free(dot_meta_obj);
+                    }
+                }
+            }
+            flb_free(dot_meta_key);
             continue;
         }
         else if (check_config_from_record(map.via.map.ptr[i].key,
@@ -1556,6 +1629,9 @@ static int get_and_pack_oci_fields_from_record(msgpack_packer *packer,
         pck_size++;
     }
 
+    if(metadata || has_dot_metadata) {
+        pck_size++;
+    }
     if (global_metadata != NULL) {
         msgpack_pack_map(packer, 2);
         msgpack_pack_str(packer, FLB_OCI_LOG_METADATA_SIZE);
@@ -1638,10 +1714,43 @@ static int get_and_pack_oci_fields_from_record(msgpack_packer *packer,
         }
     }
 
-    if (metadata) {
+    // if (metadata) {
+    //     msgpack_pack_str(packer, FLB_OCI_LOG_METADATA_SIZE);
+    //     msgpack_pack_str_body(packer, FLB_OCI_LOG_METADATA, FLB_OCI_LOG_METADATA_SIZE);
+    //     msgpack_pack_object(packer, *metadata);
+    // }
+
+    if (metadata || has_dot_metadata) {
         msgpack_pack_str(packer, FLB_OCI_LOG_METADATA_SIZE);
         msgpack_pack_str_body(packer, FLB_OCI_LOG_METADATA, FLB_OCI_LOG_METADATA_SIZE);
-        msgpack_pack_object(packer, *metadata);
+        
+        int total_meta_fields = 0;
+        if (metadata) {
+            total_meta_fields += metadata->via.map.size;
+        }
+        if (has_dot_metadata) {
+            total_meta_fields += mk_list_size(&dot_metadata_list);
+        }
+        
+        msgpack_pack_map(packer, total_meta_fields);
+        
+        if (metadata) {
+            for (int j = 0; j < metadata->via.map.size; j++) {
+                msgpack_pack_object(packer, metadata->via.map.ptr[j].key);
+                msgpack_pack_object(packer, metadata->via.map.ptr[j].val);
+            }
+        }
+        
+        if (has_dot_metadata) {
+            struct mk_list *head;
+            mk_list_foreach(head, &dot_metadata_list) {
+                dot_meta_obj = mk_list_entry(head, struct metadata_obj, _head);
+                msgpack_pack_str(packer, flb_sds_len(dot_meta_obj->key));
+                msgpack_pack_str_body(packer, dot_meta_obj->key, flb_sds_len(dot_meta_obj->key));
+                msgpack_pack_str(packer, flb_sds_len(dot_meta_obj->val));
+                msgpack_pack_str_body(packer, dot_meta_obj->val, flb_sds_len(dot_meta_obj->val));
+            }
+        }
     }
 
     *lg_id = flb_sds_create_len(log_group_id->via.str.ptr, log_group_id->via.str.size);
@@ -1655,7 +1764,17 @@ static int get_and_pack_oci_fields_from_record(msgpack_packer *packer,
             return -1;
         }
     }
-    
+    if (has_dot_metadata) {
+        struct mk_list *tmp;
+        struct mk_list *head;
+        mk_list_foreach_safe(head, tmp, &dot_metadata_list) {
+            dot_meta_obj = mk_list_entry(head, struct metadata_obj, _head);
+            if (dot_meta_obj->key) flb_sds_destroy(dot_meta_obj->key);
+            if (dot_meta_obj->val) flb_sds_destroy(dot_meta_obj->val);
+            mk_list_del(&dot_meta_obj->_head);
+            flb_free(dot_meta_obj);
+        }
+    }
     return 0;
 }
 
