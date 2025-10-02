@@ -170,7 +170,7 @@
 #define COUNT_OF_REGION (sizeof(region_mappings) / sizeof(region_mappings[0]) - 1)
 
 /* for chunking */
-#define MAX_PAYLOAD_SIZE_BYTES (3800000) // 3.8 mb 
+#define MAX_PAYLOAD_SIZE_BYTES (3800000)        // 3.8 mb
 
 #include <fluent-bit/flb_upstream.h>
 #include <fluent-bit/flb_sds.h>
@@ -310,7 +310,7 @@ struct flb_oci_logan
     bool dump_payload_file;
 };
 
-int is_valid_timezone(const char *timezone);
+int is_valid_timezone(const char *log_timezone);
 const char *get_domain_suffix_for_realm(const char *realm);
 const char *determine_realm_from_region(const char *region);
 const char *long_region_name(char *short_region_name);
