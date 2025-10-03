@@ -1487,8 +1487,8 @@ static int get_and_pack_oci_fields_from_record(msgpack_packer *packer,
                     dot_meta_obj->key = flb_sds_create(dot_meta_key);
                     dot_meta_obj->val =
                         flb_sds_create_len(map.via.map.ptr[i].val.via.str.ptr,
-                                           map.via.map.ptr[i].val.via.str.
-                                           size);
+                                           map.via.map.ptr[i].val.via.
+                                           str.size);
                     if (dot_meta_obj->key && dot_meta_obj->val) {
                         mk_list_add(&dot_meta_obj->_head, &dot_metadata_list);
                         has_dot_metadata = 1;
@@ -1885,8 +1885,8 @@ static int total_flush(struct flb_event_chunk *event_chunk,
         for (i = 0; i < map.via.map.size; i++) {
             if (map.via.map.ptr[i].val.type == MSGPACK_OBJECT_STR) {
                 estimated_total_size +=
-                    estimate_record_json_size(&map.via.map.ptr[i].val.via.
-                                              str);
+                    estimate_record_json_size(&map.via.map.ptr[i].val.
+                                              via.str);
             }
         }
     }

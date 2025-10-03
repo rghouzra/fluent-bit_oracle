@@ -103,14 +103,17 @@ static char *trim_whitespace(const char *str)
     if (!str || *str == '\0') {
         return NULL;
     }
-    while (*start && (*start == ' ' || *start == '\t' || *start == '\n')) {
+    while (*start
+           && (*start == ' ' || *start == '\t' || *start == '\n'
+               || *start == '\r')) {
         start++;
     }
     if (*start == '\0') {
         return NULL;
     }
     end = start + strlen(start) - 1;
-    while (end > start && (*end == ' ' || *end == '\t' || *end == '\n')) {
+    while (end > start
+           && (*end == ' ' || *end == '\t' || *end == '\n' || *end == '\r')) {
         end--;
     }
 
@@ -142,7 +145,7 @@ static int load_oci_credentials(struct flb_oci_logan *ctx)
         return -1;
     }
     flb_plg_debug(ctx->ins, "content = %s", content);
-    line = strtok(content, "\n");
+    line = strtok(content, "\r\n");
     while (line != NULL) {
         /* process line */
         flb_plg_debug(ctx->ins, "line = %s", line);
@@ -336,12 +339,14 @@ static flb_sds_t construct_oci_host(const char *service,
     flb_sds_t region = (ctx->imds.region ? ctx->imds.region : ctx->region);
     const char *realm = NULL;
     const char *domain_suffix = NULL;
-    if (service && ctx->domain_suffix) {
-        domain_suffix = ctx->domain_suffix;
-        goto CONSTRUCT_HOST;
-    }
+
     if (!service || !region) {
         return NULL;
+    }
+
+    if (ctx->domain_suffix) {
+        domain_suffix = ctx->domain_suffix;
+        goto CONSTRUCT_HOST;
     }
 
     realm = determine_realm_from_region(region);
