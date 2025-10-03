@@ -7,7 +7,7 @@ FROM centos:7
 RUN sed -i -e "s/^mirrorlist=http:\/\/mirrorlist.centos.org/#mirrorlist=http:\/\/mirrorlist.centos.org/g" /etc/yum.repos.d/CentOS-Base.repo && \
     sed -i -e "s/^#baseurl=http:\/\/mirror.centos.org/baseurl=http:\/\/vault.centos.org/g" /etc/yum.repos.d/CentOS-Base.repo && \
     yum -y update && \
-    yum install -y rpm-build curl ca-certificates gcc gcc-c++ cjson-devel make bash \
+    yum install -y epel-release rpm-build curl ca-certificates gcc gcc-c++ cjson-devel make bash \
     wget unzip systemd-devel flex bison \
     cyrus-sasl-lib cyrus-sasl-devel openssl openssl-libs openssl-devel libcurl-devel \
     postgresql-libs postgresql-devel postgresql-server postgresql libyaml-devel \

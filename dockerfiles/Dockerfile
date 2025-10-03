@@ -43,6 +43,7 @@ RUN echo "deb http://deb.debian.org/debian bookworm-backports main" >> /etc/apt/
     ca-certificates \
     git \
     make \
+    libcjson-dev \
     tar \
     libssl-dev \
     libcurl4-openssl-dev \
