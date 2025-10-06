@@ -188,7 +188,7 @@
 #include <fluent-bit/flb_hash.h>
 #include <fluent-bit/flb_sds.h>
 #include <monkey/mk_core/mk_list.h>
-#include "cJSON.h"
+#include <fluent-bit/flb_jsmn.h>
 #include <openssl/evp.h>
 #include <openssl/pem.h>
 #include <openssl/bio.h>

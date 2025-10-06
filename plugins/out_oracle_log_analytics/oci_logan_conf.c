@@ -1005,58 +1005,92 @@ static flb_sds_t clean_token_string(flb_sds_t input)
     return input;
 }
 
-
 static int parse_federation_response(flb_sds_t response,
                                      struct oci_security_token *token)
 {
-    cJSON *json = NULL;
-    cJSON *token_item = NULL;
+    jsmn_parser parser;
+    jsmntok_t *tokens;
+    int tok_size = 32;
+    int ret, i;
+    char *key;
+    char *val;
+    int key_len;
+    int val_len;
 
     if (!response || !token) {
         return -1;
     }
 
-    json = cJSON_Parse(response);
-    if (!json) {
+    jsmn_init(&parser);
+
+    tokens = flb_calloc(1, sizeof(jsmntok_t) * tok_size);
+    if (!tokens) {
         return -1;
     }
 
-    token_item = cJSON_GetObjectItem(json, "token");
-    if (!token_item || !cJSON_IsString(token_item)) {
-        cJSON_Delete(json);
+    ret =
+        jsmn_parse(&parser, response, flb_sds_len(response), tokens,
+                   tok_size);
+
+    if (ret == JSMN_ERROR_INVAL || ret == JSMN_ERROR_PART) {
+        flb_free(tokens);
         return -1;
     }
+    tok_size = ret;
+    for (i = 1; i < tok_size; i++) {
+        if (tokens[i].type != JSMN_STRING) {
+            continue;
+        }
 
-    const char *token_str = cJSON_GetStringValue(token_item);
-    if (!token_str) {
-        cJSON_Delete(json);
-        return -1;
+        key = response + tokens[i].start;
+        key_len = tokens[i].end - tokens[i].start;
+
+        if (key_len == 5 && strncmp(key, "token", 5) == 0) {
+            i++;
+            if (i >= tok_size || tokens[i].type != JSMN_STRING) {
+                flb_free(tokens);
+                return -1;
+            }
+
+            val = response + tokens[i].start;
+            val_len = tokens[i].end - tokens[i].start;
+
+            flb_sds_t raw_token = flb_sds_create_len(val, val_len);
+            if (!raw_token) {
+                flb_free(tokens);
+                return -1;
+            }
+
+            if (!clean_token_string(raw_token)) {
+                flb_sds_destroy(raw_token);
+                flb_free(tokens);
+                return -1;
+            }
+
+            if (token->token) {
+                flb_sds_destroy(token->token);
+            }
+            token->token = raw_token;
+
+            flb_free(tokens);
+            return 0;
+        }
     }
 
-    flb_sds_t raw_token = flb_sds_create(token_str);
-    if (!raw_token) {
-        cJSON_Delete(json);
-        return -1;
-    }
-
-    if (!clean_token_string(raw_token)) {
-        flb_sds_destroy(raw_token);
-        cJSON_Delete(json);
-        return -1;
-    }
-
-    if (token) {
-        flb_sds_destroy(token->token);
-    }
-    token->token = raw_token;
-
-    cJSON_Delete(json);
-    return 0;
+    flb_free(tokens);
+    return -1;
 }
 
 // extract jwt and its expiration time
 static int decode_jwt_and_set_expires(struct flb_oci_logan *ctx)
 {
+    jsmn_parser parser;
+    jsmntok_t *tokens;
+    int tok_size = 32;
+    int ret, i;
+    char *key;
+    int key_len;
+
     if (!ctx || !ctx->security_token.token) {
         flb_plg_error(ctx->ins, "Invalid context or token");
         return -1;
@@ -1080,11 +1114,11 @@ static int decode_jwt_and_set_expires(struct flb_oci_logan *ctx)
     memcpy(payload_b64url, dot1 + 1, payload_b64url_len);
     payload_b64url[payload_b64url_len] = '\0';
 
-    for (int i = 0; i < payload_b64url_len; i++) {
-        if (payload_b64url[i] == '-')
-            payload_b64url[i] = '+';
-        else if (payload_b64url[i] == '_')
-            payload_b64url[i] = '/';
+    for (int j = 0; j < payload_b64url_len; j++) {
+        if (payload_b64url[j] == '-')
+            payload_b64url[j] = '+';
+        else if (payload_b64url[j] == '_')
+            payload_b64url[j] = '/';
     }
 
     int padding = (4 - (payload_b64url_len % 4)) % 4;
@@ -1107,10 +1141,9 @@ static int decode_jwt_and_set_expires(struct flb_oci_logan *ctx)
         return -1;
     }
 
-    int ret =
-        flb_base64_decode((unsigned char *) decoded_payload, decoded_len,
-                          &decoded_len, (unsigned char *) payload_b64,
-                          b64_len);
+    ret = flb_base64_decode((unsigned char *) decoded_payload, decoded_len,
+                            &decoded_len, (unsigned char *) payload_b64,
+                            b64_len);
     if (ret != 0) {
         flb_plg_error(ctx->ins, "Base64 decode failed");
         flb_free(payload_b64url);
@@ -1120,40 +1153,79 @@ static int decode_jwt_and_set_expires(struct flb_oci_logan *ctx)
     }
 
     decoded_payload[decoded_len] = '\0';
-    cJSON *json = cJSON_Parse(decoded_payload);
-    if (json == NULL) {
-        const char *error_ptr = cJSON_GetErrorPtr();
-        if (error_ptr != NULL) {
-            flb_plg_error(ctx->ins, "JSON parse error before: %s", error_ptr);
-        }
-        else {
-            flb_plg_error(ctx->ins, "JSON parse error");
-        }
+
+    jsmn_init(&parser);
+
+    tokens = flb_calloc(1, sizeof(jsmntok_t) * tok_size);
+    if (!tokens) {
         flb_free(payload_b64url);
         flb_free(payload_b64);
         flb_free(decoded_payload);
         return -1;
     }
 
-    cJSON *exp_item = cJSON_GetObjectItem(json, "exp");
-    if (!exp_item || !cJSON_IsNumber(exp_item)) {
-        flb_plg_error(ctx->ins, "Missing or invalid 'exp' in JWT");
-        cJSON_Delete(json);
+    ret = jsmn_parse(&parser, decoded_payload, decoded_len, tokens, tok_size);
+
+    if (ret == JSMN_ERROR_INVAL || ret == JSMN_ERROR_PART) {
+        flb_plg_error(ctx->ins, "JSON parse error");
+        flb_free(tokens);
         flb_free(payload_b64url);
         flb_free(payload_b64);
         flb_free(decoded_payload);
         return -1;
     }
 
-    time_t exp_value = (time_t) exp_item->valuedouble;
-    char *json_str = cJSON_Print(json);
-    if (json_str) {
-        flb_free(json_str);
+    tok_size = ret;
+
+    // Find "exp" key
+    time_t exp_value = 0;
+    for (i = 1; i < tok_size; i++) {
+        if (tokens[i].type != JSMN_STRING) {
+            continue;
+        }
+
+        key = decoded_payload + tokens[i].start;
+        key_len = tokens[i].end - tokens[i].start;
+
+        if (key_len == 3 && strncmp(key, "exp", 3) == 0) {
+            i++;
+            if (i >= tok_size || tokens[i].type != JSMN_PRIMITIVE) {
+                flb_plg_error(ctx->ins, "Missing or invalid 'exp' in JWT");
+                flb_free(tokens);
+                flb_free(payload_b64url);
+                flb_free(payload_b64);
+                flb_free(decoded_payload);
+                return -1;
+            }
+
+            // Extract numeric value
+            char *exp_str = decoded_payload + tokens[i].start;
+            int exp_len = tokens[i].end - tokens[i].start;
+            char exp_buf[32];
+
+            if (exp_len >= sizeof(exp_buf)) {
+                exp_len = sizeof(exp_buf) - 1;
+            }
+
+            strncpy(exp_buf, exp_str, exp_len);
+            exp_buf[exp_len] = '\0';
+
+            exp_value = (time_t) atoll(exp_buf);
+            break;
+        }
+    }
+
+    if (exp_value == 0) {
+        flb_free(tokens);
+        flb_free(payload_b64url);
+        flb_free(payload_b64);
+        flb_free(decoded_payload);
+        return -1;
     }
 
     ctx->security_token.expires_at = exp_value;
 
-    cJSON_Delete(json);
+    flb_free(tokens);
     flb_free(payload_b64url);
     flb_free(payload_b64);
     flb_free(decoded_payload);
