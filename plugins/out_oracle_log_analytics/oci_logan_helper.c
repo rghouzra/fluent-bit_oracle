@@ -464,8 +464,6 @@ static int init_oci_timezone_hash(void)
                                  strlen(oci_supported_timezones[i]),
                                  (void *) "1", sizeof("1"));
         if (ret < 0) {
-            fprintf(stderr, "flb_hash_table_add failed line 192");
-            fflush(stderr);
             flb_hash_table_destroy(oci_timezone_hash);
             oci_timezone_hash = NULL;
             return -3;
@@ -485,23 +483,17 @@ static void cleanup_oci_timezone_hash(void)
 
 static int is_oci_supported_timezone(const char *log_timezone)
 {
-    void *out_buf;
-    size_t out_size;
+    void *out_buf = NULL;
+    size_t out_size = 0;
     char *lower_tz;
-    int i;
+    int i, ht_ret;
 
-    fprintf(stderr, "is_oci_supported_timezone::timezone->[%s]\n",
-            log_timezone);
-    fflush(stderr);
+    
     if (!log_timezone) {
         return 0;
     }
     int ret_init_oci_timezone_hash = init_oci_timezone_hash();
 
-    fprintf(stderr,
-            "is_oci_supported_timezone::init_oci_timezone_hash->[%d]\n",
-            ret_init_oci_timezone_hash);
-    fflush(stderr);
     if (ret_init_oci_timezone_hash != 0) {
         return 0;
     }
@@ -514,16 +506,14 @@ static int is_oci_supported_timezone(const char *log_timezone)
         lower_tz[i] = tolower(lower_tz[i]);
     }
 
-    fprintf(stderr, "is_oci_supported_timezone::lower_tz->%s\n", lower_tz);
-    fflush(stderr);
-    flb_hash_table_get(oci_timezone_hash, lower_tz, strlen(lower_tz),
+    ht_ret = flb_hash_table_get(oci_timezone_hash, lower_tz, strlen(lower_tz),
                        &out_buf, &out_size);
-
-    fprintf(stderr, "is_oci_supported_timezone::out_buf->%s\n",
-            (char *) out_buf);
-    fflush(stderr);
+    if (ht_ret != 0) {
+        free(lower_tz);
+        return 0;
+    } 
     free(lower_tz);
-    return ((out_buf != NULL ? (!strcmp(out_buf, "1") ? 1 : 0) : 0));
+    return (out_buf != NULL && strcmp((char *) out_buf, "1") == 0) ? 1 : 0;
 }
 
 
@@ -533,11 +523,7 @@ int is_valid_timezone(const char *log_timezone)
     if (!log_timezone || strlen(log_timezone) == 0) {
         return 0;
     }
-    fprintf(stderr, "is_valid_timezone::timezone->[%s]\n", log_timezone);
-    fflush(stderr);
     if (is_oci_supported_timezone(log_timezone)) {
-        fprintf(stderr, "timezone %s is valid", log_timezone);
-        fflush(stderr);
         return 1;
     }
     return 0;
@@ -578,6 +564,9 @@ const char *get_domain_suffix_for_realm(const char *realm)
 
 const char *long_region_name(char *short_region_name)
 {
+    if (short_region_name == NULL) {
+        return NULL;
+    }
     for (size_t i = 0; i < COUNT_OF_REGION; i++) {
         if (strcmp(short_region_name, region_mappings[i].short_name) == 0) {
             return (region_mappings[i].long_name);

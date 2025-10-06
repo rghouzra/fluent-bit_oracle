@@ -1049,7 +1049,7 @@ static int flush_to_endpoint(struct flb_oci_logan *ctx,
         if (!c) {
             flb_plg_error(ctx->ins,
                           "failed to create instance principal client for logging");
-            out_ret = should_retry * FLB_RETRY;
+            out_ret = should_retry ? FLB_RETRY : FLB_ERROR;
             goto error_label;
         }
     }
