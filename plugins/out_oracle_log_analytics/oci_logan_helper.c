@@ -462,7 +462,7 @@ static int init_oci_timezone_hash(void)
         ret = flb_hash_table_add(oci_timezone_hash,
                                  oci_supported_timezones[i],
                                  strlen(oci_supported_timezones[i]),
-                                 (void *) "1", 1);
+                                 (void *) "1", sizeof("1"));
         if (ret < 0) {
             fprintf(stderr, "flb_hash_table_add failed line 192");
             fflush(stderr);
