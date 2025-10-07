@@ -52,6 +52,10 @@ static inline void EVP_MD_CTX_free(EVP_MD_CTX *ctx)
 
 #endif
 
+static int is_test_mode(void);
+static flb_sds_t mock_imds_request(struct flb_oci_logan *ctx, const char *path);
+static flb_sds_t mock_federation_response(struct flb_oci_logan *ctx);
+
 static int create_pk_context(flb_sds_t filepath, const char *key_passphrase,
                              struct flb_oci_logan *ctx)
 {
@@ -351,6 +355,14 @@ static flb_sds_t make_imds_request(struct flb_oci_logan *ctx,
     size_t b_sent;
     int ret;
 
+    if (is_test_mode()) {
+        if (getenv("TEST_IMDS_SUCCESS")) {
+            return mock_imds_request(ctx, path);
+        } else if (getenv("TEST_IMDS_FAILURE")) {
+            return NULL;
+        }
+    }
+
     flb_plg_debug(ctx->ins, "path->%s", path);
     client = flb_http_client(u_conn, FLB_HTTP_GET, path, NULL, 0,
                              ORACLE_IMDS_HOST, 80, NULL, 0);
@@ -584,18 +596,21 @@ int get_keys_and_certs(struct flb_oci_logan *ctx, struct flb_config *config)
     flb_sds_t cert_resp = NULL;
     flb_sds_t key_resp = NULL;
     flb_sds_t int_cert_resp = NULL;
+    struct flb_connection *u_conn = NULL;
 
-    ctx->u =
-        flb_upstream_create(config, ORACLE_IMDS_HOST, 80, FLB_IO_TCP, NULL);
-    if (!ctx->u) {
-        flb_plg_error(ctx->ins, "failed to create imds upstream connection");
-        return 0;
-    }
-
-    struct flb_connection *u_conn = flb_upstream_conn_get(ctx->u);
-    if (!u_conn) {
-        flb_plg_error(ctx->ins, "failed to get imds upstream connection");
-        return 0;
+    if (!is_test_mode()) {
+        ctx->u =
+            flb_upstream_create(config, ORACLE_IMDS_HOST, 80, FLB_IO_TCP, NULL);
+        if (!ctx->u) {
+            flb_plg_error(ctx->ins, "failed to create imds upstream connection");
+            return 0;
+        }
+    
+        u_conn = flb_upstream_conn_get(ctx->u);
+        if (!u_conn) {
+            flb_plg_error(ctx->ins, "failed to get imds upstream connection");
+            return 0;
+        }
     }
 
     region_resp =
@@ -669,27 +684,29 @@ int get_keys_and_certs(struct flb_oci_logan *ctx, struct flb_config *config)
     return 1;
 
   error:
-    if (region_resp) {
-        flb_sds_destroy(region_resp);
-    }
-    if (cert_resp) {
-        flb_sds_destroy(cert_resp);;
-    }
-    if (key_resp) {
-        flb_sds_destroy(key_resp);
-    }
-    if (int_cert_resp) {
-        flb_sds_destroy(int_cert_resp);
-    }
+    if (!is_test_mode()) {
+        if (region_resp) {
+            flb_sds_destroy(region_resp);
+        }
+        if (cert_resp) {
+            flb_sds_destroy(cert_resp);;
+        }
+        if (key_resp) {
+            flb_sds_destroy(key_resp);
+        }
+        if (int_cert_resp) {
+            flb_sds_destroy(int_cert_resp);
+        }
 
-    ctx->imds.fingerprint = NULL;
-    ctx->imds.intermediate_cert = NULL;
-    ctx->imds.leaf_cert = NULL;
-    ctx->imds.leaf_key = NULL;
-    ctx->imds.region = NULL;
-    flb_upstream_conn_release(u_conn);
-    flb_upstream_destroy(ctx->u);
-    ctx->u = NULL;
+        ctx->imds.fingerprint = NULL;
+        ctx->imds.intermediate_cert = NULL;
+        ctx->imds.leaf_cert = NULL;
+        ctx->imds.leaf_key = NULL;
+        ctx->imds.region = NULL;
+        flb_upstream_conn_release(u_conn);
+        flb_upstream_destroy(ctx->u);
+        ctx->u = NULL;
+    }
     return 0;
 }
 
@@ -1310,6 +1327,10 @@ flb_sds_t sign_and_send_federation_request(struct flb_oci_logan *ctx,
     struct tm *tm_info;
     char date_buf[128];
 
+    if (is_test_mode()) {
+        flb_sds_destroy(url_path);
+        return mock_federation_response(ctx);
+    }
     if (!host) {
         flb_sds_destroy(tmp_host);
         flb_sds_destroy(url_path);
@@ -1502,7 +1523,8 @@ struct flb_oci_logan *flb_oci_logan_conf_create(struct flb_output_instance
             flb_oci_logan_conf_destroy(ctx);
             return NULL;
         }
-
+        ctx->security_token.token = NULL;
+        ctx->security_token.expires_at = 0;
         flb_sds_t json_payload = create_federation_payload(ctx);
         if (!json_payload) {
             flb_plg_error(ctx->ins, "failed to create federation payload");
@@ -1751,4 +1773,108 @@ int flb_oci_logan_conf_destroy(struct flb_oci_logan *ctx)
 
     flb_free(ctx);
     return 0;
+}
+
+static int is_test_mode(void) {
+    return getenv("FLB_OCI_PLUGIN_UNDER_TEST") != NULL;
+}
+
+static flb_sds_t mock_imds_request(struct flb_oci_logan *ctx, const char *path) {
+    if (strstr(path, "/instance/region")) {
+        return flb_sds_create("phx");
+    } 
+    
+    else if (strstr(path, "/identity/cert.pem")) 
+    {
+        return flb_sds_create("-----BEGIN CERTIFICATE-----\n"
+                             "MIIDDTCCAfWgAwIBAgIJAKxHjMcXpyEUMA0GCSqGSIb3DQEBCwUAMBQxEjAQBgNV\n"
+                             "BAoMCW9yYWNsZS5jb20wHhcNMjMwMTAxMDAwMDAwWhcNMjQwMTAxMDAwMDAwWjAU\n"
+                             "MRIwEAYDVQQKDAlvcmFjbGUuY29tMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIB\n"
+                             "CgKCAQEAr3EeMxxenIRQr3EeMxxenIRQr3EeMxxenIRQr3EeMxxenIRQr3EeMxxe\n"
+                             "nIRQr3EeMxxenIRQr3EeMxxenIRQr3EeMxxenIRQr3EeMxxenIRQr3EeMxxenIRQ\n"
+                             "QIDAQABMA0GCSqGSIb3DQEBCwUAA4IBAQCvMR4zHF6chFCvMR4zHF6chFCvMR4z\n"
+                             "-----END CERTIFICATE-----");
+    }
+    
+    
+    else if (strstr(path, "/identity/key.pem"))
+    
+    {
+        return flb_sds_create("-----BEGIN RSA PRIVATE KEY-----\n"
+                             "MIIEpAIBAAKCAQEAr3EeMxxenIRQr3EeMxxenIRQr3EeMxxenIRQr3EeMxxenIRQ\n"
+                             "r3EeMxxenIRQr3EeMxxenIRQr3EeMxxenIRQr3EeMxxenIRQr3EeMxxenIRQr3Ee\n"
+                             "MxxenIRQr3EeMxxenIRQr3EeMxxenIRQr3EeMxxenIRQr3EeMxxenIRQQIDAQAB\n"
+                             "AoIBAEr3EeMxxenIRQr3EeMxxenIRQr3EeMxxenIRQr3EeMxxenIRQr3EeMxxenI\n"
+                             "RQr3EeMxxenIRQr3EeMxxenIRQr3EeMxxenIRQr3EeMxxenIRQr3EeMxxenIRQr3\n"
+                             "-----END RSA PRIVATE KEY-----");
+    }
+    
+        else if (strstr(path, "/identity/intermediate.pem")) {
+                return flb_sds_create("-----BEGIN CERTIFICATE-----\n"
+                             "MIIDHTCCAgWgAwIBAgIJAKxHjMcXpyE1MA0GCSqGSIb3DQEBCwUAMBQxEjAQBgNV\n"
+                             "BAoMCW9yYWNsZS5jb20wHhcNMjMwMTAxMDAwMDAwWhcNMjQwMTAxMDAwMDAwWjAU\n"
+                             "MRIwEAYDVQQKDAlvcmFjbGUuY29tMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIB\n"
+                             "CgKCAQEAr3EeMxxenIRQr3EeMxxenIRQr3EeMxxenIRQr3EeMxxenIRQr3EeMxxe\n"
+                             "nIRQr3EeMxxenIRQr3EeMxxenIRQr3EeMxxenIRQr3EeMxxenIRQr3EeMxxenIRQ\n"
+                             "QIDAQABMA0GCSqGSIb3DQEBCwUAA4IBAQCvMR4zHF6chFCvMR4zHF6chFCvMR4z\n"
+                             "-----END CERTIFICATE-----");
+    }
+    return NULL;
+}
+
+static flb_sds_t mock_federation_response(struct flb_oci_logan *ctx) {
+    const char *header = "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9";
+    
+    time_t now = time(NULL);
+    time_t exp = now + 3600;
+    
+    char payload_json[512];
+    snprintf(payload_json, sizeof(payload_json),
+             "{\"sub\":\"ocid1.instance.oc1.phx.test\","
+             "\"opc-instance\":\"ocid1.instance.oc1.phx.test\","
+             "\"exp\":%ld,"
+             "\"iat\":%ld,"
+             "\"jti\":\"test-token-id\"}",
+             exp, now);
+    
+
+    unsigned char b64_payload[1024];
+    size_t b64_len = sizeof(b64_payload);
+    flb_base64_encode(b64_payload, sizeof(b64_payload), &b64_len,
+                      (unsigned char *)payload_json, strlen(payload_json));
+    b64_payload[b64_len] = '\0';
+    
+    int i;
+    for (i = 0; i < b64_len; i++) {
+        if (b64_payload[i] == '+') b64_payload[i] = '-';
+        if (b64_payload[i] == '/') b64_payload[i] = '_';
+        if (b64_payload[i] == '=') {
+            b64_payload[i] = '\0';
+            break;
+        }
+    }
+    
+    const char *signature = "ths_signature_is_for_test";
+    
+    flb_sds_t jwt = flb_sds_create_size(1024);
+    flb_sds_printf(&jwt, "%s.%s.%s", header, b64_payload, signature);
+    
+    flb_sds_t response = flb_sds_create_size(2048);
+    flb_sds_printf(&response, "{\"token\":\"%s\"}", jwt);
+    
+    flb_sds_destroy(jwt);
+    
+    flb_plg_info(ctx->ins, "[mock]created federation response");
+    
+    if (parse_federation_response(response, &ctx->security_token) < 0) {
+        flb_plg_error(ctx->ins, "failed to parse mock federation response");
+        flb_sds_destroy(response);
+        return NULL;
+    }
+    
+    ctx->security_token.expires_at = exp;
+    
+    flb_plg_info(ctx->ins, "security token expir e in %ld", exp);
+    
+    return response;
 }
