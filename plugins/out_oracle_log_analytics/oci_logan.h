@@ -188,6 +188,7 @@
 #include <fluent-bit/flb_hash.h>
 #include <fluent-bit/flb_sds.h>
 #include <monkey/mk_core/mk_list.h>
+#include <fluent-bit/flb_gzip.h>
 #include <fluent-bit/flb_jsmn.h>
 #include <openssl/evp.h>
 #include <openssl/pem.h>
@@ -316,3 +317,4 @@ const char *get_domain_suffix_for_realm(const char *realm);
 const char *determine_realm_from_region(const char *region);
 const char *long_region_name(char *short_region_name);
 #endif
+

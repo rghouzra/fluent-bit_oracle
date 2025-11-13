@@ -187,8 +187,8 @@ static flb_sds_t add_header_and_signing(struct flb_http_client *c,
 }
 
 static int build_headers(struct flb_http_client *c, struct flb_oci_logan *ctx,
-                         flb_sds_t json, flb_sds_t hostname, int port,
-                         flb_sds_t uri)
+                         void *zipped_payload, size_t zipped_payload_size,
+                         flb_sds_t hostname, int port, flb_sds_t uri)
 {
     int ret = -1;
     flb_sds_t tmp_sds = NULL;
@@ -265,8 +265,9 @@ static int build_headers(struct flb_http_client *c, struct flb_oci_logan *ctx,
 
     /* Add x-content-sha256 Header */
     ret = flb_hash_simple(FLB_HASH_SHA256,
-                          (unsigned char *) json,
-                          flb_sds_len(json), sha256_buf, sizeof(sha256_buf));
+                          (unsigned char *) zipped_payload,
+                          zipped_payload_size,
+                          sha256_buf, sizeof(sha256_buf));
 
     if (ret != FLB_CRYPTO_SUCCESS) {
         flb_plg_error(ctx->ins,
@@ -311,8 +312,8 @@ static int build_headers(struct flb_http_client *c, struct flb_oci_logan *ctx,
     }
 
     /* Add content-Length */
-    tmp_len = snprintf(tmp_sds, flb_sds_alloc(tmp_sds) - 1, "%i",
-                       (int) flb_sds_len(json));
+    tmp_len = snprintf(tmp_sds, flb_sds_alloc(tmp_sds) - 1, "%zu",
+                       zipped_payload_size); 
     flb_sds_len_set(tmp_sds, tmp_len);
     signing_str = add_header_and_signing(c, signing_str,
                                          FLB_OCI_HEADER_CONTENT_LENGTH,
@@ -631,7 +632,7 @@ static flb_sds_t compose_uri(struct flb_oci_logan *ctx,
     flb_sds_cat_safe(&uri_param, FLB_OCI_PAYLOAD_TYPE,
                      sizeof(FLB_OCI_PAYLOAD_TYPE) - 1);
     flb_sds_cat_safe(&uri_param, "=", 1);
-    flb_sds_cat_safe(&uri_param, "JSON", 4);
+    flb_sds_cat_safe(&uri_param, "GZIP", 4);
 
 
     if (!uri_param) {
@@ -978,52 +979,62 @@ struct flb_http_client *create_oci_signed_request_for_logging(struct
     return NULL;
 }
 
-static void dump_payload_to_file(struct flb_oci_logan *ctx, flb_sds_t payload,
-                                 flb_sds_t log_group_id)
+static void dump_payload_to_file(struct flb_oci_logan *ctx, 
+                                 const void *payload, 
+                                 size_t payload_size,
+                                 flb_sds_t log_group_id,
+                                 const char *suffix)
 {
     char hash_in_hex[66];
     char filename[1024];
-    char *content_sha256;
-    int i;
-    size_t payload_size;
-    FILE *fp;
+    FILE *fp = NULL;
 
     if (!ctx->payload_files_location) {
-        flb_plg_error(ctx->ins,
-                      "directory path for dumping should be specified");
+        flb_plg_error(ctx->ins, "directory path for dumping should be specified");
         return;
     }
-    payload_size = flb_sds_len(payload);
-    content_sha256 = calculate_content_sha256_b64(payload, payload_size);
+    
+    char *content_sha256 = calculate_content_sha256_b64(payload, payload_size);
     if (!content_sha256) {
         return;
     }
 
-    for (i = 0; i < SHA256_DIGEST_LENGTH; i++) {
-        sprintf(hash_in_hex + (i * 2), "%02x", content_sha256[i]);
+    // Create hex hash for filename
+    int i;
+    for(i = 0; i < 16 && i < strlen(content_sha256); i++) {
+        sprintf(hash_in_hex + (i * 2), "%02x", (unsigned char)content_sha256[i]);
     }
 
-    snprintf(filename, sizeof(filename), "%s/%s_%.12s.json",
-             ctx->payload_files_location, log_group_id, hash_in_hex);
-
+    snprintf(filename, sizeof(filename), "%s/%s_%.12s_%s.dat",
+             ctx->payload_files_location, log_group_id, hash_in_hex, suffix);
+    
     if (access(filename, F_OK) == 0) {
-        flb_plg_debug(ctx->ins, "payload s already dumped to->%s", filename);
+        flb_plg_debug(ctx->ins, "%s payload already dumped to: %s", suffix, filename);
         flb_free(content_sha256);
         return;
     }
-
-    fp = fopen(filename, "w");
+    
+    fp = fopen(filename, "wb");
     if (!fp) {
-        flb_plg_error(ctx->ins, "cant open file -> %s", filename);
+        flb_plg_error(ctx->ins, "can't open file: %s", filename);
         flb_free(content_sha256);
         return;
     }
-
-    fprintf(fp, "%s", payload);
+    
+    fwrite(payload, 1, payload_size, fp);
     fclose(fp);
     flb_free(content_sha256);
+    
+    flb_plg_info(ctx->ins, "%s payload (%zu bytes) dumped to: %s", 
+                 suffix, payload_size, filename);
+}
 
-    flb_plg_info(ctx->ins, "payload dumped to: %s", filename);
+static void dump_compressed_payload_to_file(struct flb_oci_logan *ctx, 
+                                           const void *compressed_payload, 
+                                           size_t compressed_size,
+                                           flb_sds_t log_group_id)
+{
+    dump_payload_to_file(ctx, compressed_payload, compressed_size, log_group_id, "compressed");
 }
 
 static int flush_to_endpoint(struct flb_oci_logan *ctx,
@@ -1036,62 +1047,96 @@ static int flush_to_endpoint(struct flb_oci_logan *ctx,
     flb_sds_t full_uri;
     struct flb_http_client *c = NULL;
     struct flb_connection *u_conn;
-    bool should_retry;
+    bool compressed = FLB_FALSE;
+    void *payload_buf = NULL;
+    size_t payload_size = 0;
+    int compress_ret = 0;
+    bool should_retry = 0;
+    // struct timespec start, end;
+    // double elapsed;
 
     if (!payload) {
         return FLB_ERROR;
     }
-    if (ctx->dump_payload_file) {
-        dump_payload_to_file(ctx, payload, log_group_id);
-    }
-    full_uri = compose_uri(ctx, log_set_id, log_group_id);
-    if (!full_uri) {
-        flb_plg_error(ctx->ins,
-                      "unable to compose uri for logGroup: %s logSet: %s",
-                      ctx->oci_la_log_group_id, ctx->oci_la_log_set_id);
-        return FLB_ERROR;
+
+    payload_buf = (void *) payload;
+    payload_size = flb_sds_len(payload);
+    // clock_gettime(CLOCK_MONOTONIC, &start);
+    compress_ret = flb_gzip_compress((void *) payload, flb_sds_len(payload),
+                                    &payload_buf, &payload_size);
+    // clock_gettime(CLOCK_MONOTONIC, &end);
+    // elapsed = (end.tv_sec - start.tv_sec) * 1000.0 + 
+    //              (end.tv_nsec - start.tv_nsec) / 1000000.0;
+    // FILE *fp_log = fopen("/tmp/compression.log", "a");
+
+    // fprintf(fp_log, "elpased in ms -> %.3f\n", elapsed);
+    // fflush(fp_log);
+    if (compress_ret == 0) {
+        compressed = FLB_TRUE;
+        flb_plg_debug(ctx->ins, "gzip: %zu -> %zu bytes (%.1f%% reduction)", 
+                      flb_sds_len(payload), payload_size,
+                      100.0 * (1.0 - ((double)payload_size / flb_sds_len(payload))));
+    } else {
+        flb_plg_debug(ctx->ins, "gzip compression failed, using original payload");
+        compressed = FLB_FALSE;
+        payload_buf = (void *) payload;
+        payload_size = flb_sds_len(payload);
     }
 
-    flb_plg_debug(ctx->ins, "full_uri=%s", full_uri);
+    flb_plg_info(ctx->ins, "Sending payload: size=%zu, compressed=%s", 
+                 payload_size, compressed ? "true" : "false");
+
+    if (ctx->dump_payload_file) {
+        dump_payload_to_file(ctx, payload, flb_sds_len(payload), log_group_id, "original");
+        if (compressed == FLB_TRUE) {
+            dump_compressed_payload_to_file(ctx, payload_buf, payload_size, log_group_id);
+        }
+    }
+
+    full_uri = compose_uri(ctx, log_set_id, log_group_id);
+    if (!full_uri) {
+        flb_plg_error(ctx->ins, "unable to compose uri");
+        if (compressed && payload_buf != (void *)payload) {
+            flb_free(payload_buf);
+        }
+        return FLB_ERROR;
+    }
 
     u_conn = flb_upstream_conn_get(ctx->u);
     if (!u_conn) {
         flb_sds_destroy(full_uri);
+        if (compressed && payload_buf != (void *)payload) {
+            flb_free(payload_buf);
+        }
         return FLB_ERROR;
     }
-    should_retry = 0;
+
+    // Create HTTP client based on auth type
     if (strcmp(ctx->auth_type, "instance_principal") == 0) {
-        c = create_oci_signed_request_for_logging(ctx, u_conn,
-                                                  full_uri,
+        c = create_oci_signed_request_for_logging(ctx, u_conn, full_uri,
                                                   ctx->ins->host.name,
                                                   ctx->ins->host.port,
-                                                  payload,
-                                                  (payload ?
-                                                   flb_sds_len(payload) : 0),
+                                                  payload_buf, payload_size,
                                                   &should_retry);
         if (!c) {
-            flb_plg_error(ctx->ins,
-                          "failed to create instance principal client for logging");
+            flb_plg_error(ctx->ins, "failed to create instance principal client");
             out_ret = should_retry ? FLB_RETRY : FLB_ERROR;
             goto error_label;
         }
     }
     else {
-        c = flb_http_client(u_conn, FLB_HTTP_POST, full_uri, (void *) payload,
-                            flb_sds_len(payload), ctx->ins->host.name,
-                            ctx->ins->host.port, ctx->proxy, 0);
+        c = flb_http_client(u_conn, FLB_HTTP_POST, full_uri, payload_buf, payload_size,
+                           ctx->ins->host.name, ctx->ins->host.port, ctx->proxy, 0);
         if (!c) {
-            flb_plg_error(ctx->ins,
-                          "failed to config file client for logging");
+            flb_plg_error(ctx->ins, "failed to create config file client");
             goto error_label;
         }
+        
         flb_http_allow_duplicated_headers(c, FLB_FALSE);
-
         flb_http_buffer_size(c, FLB_HTTP_DATA_SIZE_MAX);
 
-        if (build_headers
-            (c, ctx, payload, ctx->ins->host.name, ctx->ins->host.port,
-             full_uri) < 0) {
+        if (build_headers(c, ctx, payload_buf, payload_size,
+                         ctx->ins->host.name, ctx->ins->host.port, full_uri) < 0) {
             flb_plg_error(ctx->ins, "failed to build headers");
             goto error_label;
         }
@@ -1103,20 +1148,15 @@ static int flush_to_endpoint(struct flb_oci_logan *ctx,
     }
 
     out_ret = FLB_OK;
-
     http_ret = flb_http_do(c, &b_sent);
 
     if (http_ret == 0) {
         if (c->resp.status != 200) {
-            flb_plg_debug(ctx->ins, "request header %s", c->header_buf);
-
             out_ret = FLB_ERROR;
-
             if (c->resp.payload && c->resp.payload_size > 0) {
                 if (retry_error(c, ctx) == FLB_TRUE) {
                     out_ret = FLB_RETRY;
                 }
-
                 flb_plg_error(ctx->ins, "%s:%i, retry=%s, HTTP status=%i\n%s",
                               ctx->ins->host.name, ctx->ins->host.port,
                               (out_ret == FLB_RETRY ? "true" : "false"),
@@ -1130,38 +1170,33 @@ static int flush_to_endpoint(struct flb_oci_logan *ctx,
             }
         }
         else {
-            flb_plg_debug(ctx->ins, "data -> [%s]\theaders->[%s]",
-                          c->resp.data, c->resp.headers_end);
-            flb_plg_info(ctx->ins, "log sent to oci   with success");
+            flb_plg_info(ctx->ins, "log sent to OCI with success");
         }
     }
     else {
         out_ret = FLB_RETRY;
-        flb_plg_error(ctx->ins,
-                      "could not flush records to %s:%i (http_do=%i), retry=%s",
+        flb_plg_error(ctx->ins, "could not flush records to %s:%i (http_do=%i), retry=%s",
                       ctx->ins->host.name, ctx->ins->host.port, http_ret,
                       (out_ret == FLB_RETRY ? "true" : "false"));
         goto error_label;
     }
 
-  error_label:
+error_label:
     if (full_uri) {
         flb_sds_destroy(full_uri);
     }
-
-    /* Destroy HTTP client context */
     if (c) {
         flb_http_client_destroy(c);
     }
-
-    /* Release the TCP connection */
     if (u_conn) {
         flb_upstream_conn_release(u_conn);
     }
-
+    if (compressed && payload_buf != (void *)payload) {
+        flb_free(payload_buf);
+    }
+    
     return out_ret;
 }
-
 
 static void pack_oci_fields(msgpack_packer *packer, struct flb_oci_logan *ctx,
                             char *tag, int tag_len)
