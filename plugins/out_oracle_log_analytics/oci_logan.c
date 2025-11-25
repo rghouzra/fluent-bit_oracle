@@ -1101,6 +1101,7 @@ static int flush_to_endpoint(struct flb_oci_logan *ctx,
         }
         return FLB_ERROR;
     }
+    flb_plg_info(ctx->ins, "composed uri: %s", full_uri);
 
     u_conn = flb_upstream_conn_get(ctx->u);
     if (!u_conn) {
