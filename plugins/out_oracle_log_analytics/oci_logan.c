@@ -1005,8 +1005,8 @@ static void dump_payload_to_file(struct flb_oci_logan *ctx,
         sprintf(hash_in_hex + (i * 2), "%02x", (unsigned char)content_sha256[i]);
     }
 
-    snprintf(filename, sizeof(filename), "%s/%s_%.12s_%s.dat",
-             ctx->payload_files_location, log_group_id, hash_in_hex, suffix);
+    snprintf(filename, sizeof(filename), "%s/%s_%.12s.gz",
+             ctx->payload_files_location, log_group_id, hash_in_hex);
     
     if (access(filename, F_OK) == 0) {
         flb_plg_debug(ctx->ins, "%s payload already dumped to: %s", suffix, filename);
@@ -1087,7 +1087,6 @@ static int flush_to_endpoint(struct flb_oci_logan *ctx,
                  payload_size, compressed ? "true" : "false");
 
     if (ctx->dump_payload_file) {
-        dump_payload_to_file(ctx, payload, flb_sds_len(payload), log_group_id, "original");
         if (compressed == FLB_TRUE) {
             dump_compressed_payload_to_file(ctx, payload_buf, payload_size, log_group_id);
         }
